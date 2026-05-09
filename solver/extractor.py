@@ -277,42 +277,81 @@ def extract_condition(text: str) -> Optional[str]:
 
 def extract_equation(text: str) -> Optional[str]:
     """
-    FIX: Extract clean chemical equation from question text.
-    Problem: "5g CaCO3 dipanaskan. CaCO3 -> CaO + CO2"
-             old parser grabbed entire sentence before -> as LHS
-    Fix: Find -> position, trim LHS to last sentence/clause boundary
+    Extract clean chemical equation from question text.
+    LHS must start with a capital-letter formula token (not BM words).
+    Handles equation at start, middle, or end of question.
     """
     t = normalize_text(text)
-
     arrow_pos = t.find('->')
     if arrow_pos == -1:
         return None
 
-    # ── LEFT SIDE: trim at sentence/clause boundaries ──
-    left = t[:arrow_pos]
-    # Stop at sentence end, comma, or BM/EN clause starters
-    for sep in ['. ', ', ', ' jika ', ' apabila ', ' dan ', ' atau ',
-                ' if ', ' when ', ' where ', ' with ', ' using ']:
-        pos = left.rfind(sep)
-        if pos != -1:
-            left = left[pos + len(sep):]
+    left  = t[:arrow_pos].strip()
+    right = t[arrow_pos + 2:].strip()
 
-    # Remove leading non-formula characters
-    left = re.sub(r'^[^A-Z0-9]+', '', left.strip())
-
-    # ── RIGHT SIDE: trim at sentence/clause boundaries ──
-    right = t[arrow_pos + 2:]
-    for sep in ['. ', ', jika ', ', apabila ', ', dan ', ', if ', ', when ']:
+    # Trim right at first clause/sentence boundary
+    for sep in ['. ', ', jika ', ', apabila ', ', dan ', ', if ',
+                ', when ', ', berapakah', ', hitungkan']:
         pos = right.find(sep)
         if pos != -1:
             right = right[:pos]
 
-    eq = (left.strip() + " -> " + right.strip()).strip()
+    # Trim left: find last occurrence of a clause separator,
+    # then take everything after it as potential equation LHS
+    for sep in ['. ', ', berapakah', ', hitungkan', ', jika ',
+                ', apabila ', 'tindak balas ', 'reaction ', 'persamaan ']:
+        pos = left.rfind(sep)
+        if pos != -1:
+            candidate = left[pos + len(sep):].strip()
+            if candidate and re.match(r'^[A-Z0-9]', candidate):
+                left = candidate
+                break
+
+    # Walk left string to find where a valid formula chain begins
+    # Valid start: digit (stoich coeff) or uppercase letter
+    m = re.search(r'(\d*[A-Z][A-Za-z0-9()]*(?:\s*[+]\s*\d*[A-Z][A-Za-z0-9()]*)*)$', left)
+    if m:
+        left = m.group(1).strip()
+
+    eq = (left + " -> " + right.strip()).strip()
     eq = re.sub(r'\s+', ' ', eq)
 
-    if '->' in eq and re.search(r'[A-Z]', eq):
-        return eq
-    return None
+    # Validate: LHS must start with formula char and be reasonable length
+    lhs_part = eq.split('->')[0].strip()
+    if not re.match(r'^[0-9A-Z]', lhs_part):
+        return None
+    if len(lhs_part) > 60:
+        return None
+
+    return eq if '->' in eq else None
+
+
+def _find_target_formula(question: str, rhs_formulas: List[str], lhs_formulas: List[str]) -> Optional[str]:
+    """
+    Find which RHS formula the question is ASKING ABOUT.
+    Priority:
+    1. Formula mentioned after 'isipadu X' or 'jisim X' pattern
+    2. RHS formula explicitly in question (not in LHS)
+    3. Last RHS formula as fallback
+    """
+    q_upper = question.upper()
+
+    for pattern in [
+        r'(?:ISIPADU|VOLUME)\s+(?:GAS\s+)?([A-Z][A-Za-z0-9()]+)',
+        r'(?:JISIM|MASS)\s+(?:LOGAM\s+|PEPEJAL\s+|AIR\s+)?([A-Z][A-Za-z0-9()]+)',
+        r'([A-Z][A-Za-z0-9()]+)\s+(?:YANG\s+TERHASIL|YANG\s+DIHASILKAN|FORMED)',
+    ]:
+        m = re.search(pattern, q_upper)
+        if m:
+            candidate = m.group(1)
+            if candidate in rhs_formulas:
+                return candidate
+
+    for f in rhs_formulas:
+        if f in question and f not in lhs_formulas:
+            return f
+
+    return rhs_formulas[-1] if rhs_formulas else None
 
 
 def extract_isotope_data(text: str) -> Optional[Dict[str, List[float]]]:
@@ -759,15 +798,21 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     if equation and masses and any(k in ql for k in [
         "stoichiometry", "stoikiometri", "formed", "terbentuk", "hasilkan",
         "produce", "reacts", "reaction", "mendapan", "precipitate", "pemendapan",
-        "terhasil", "dihasilkan", "bertindak balas", "sepenuhnya", "completely"
+        "terhasil", "dihasilkan", "bertindak balas", "bertindak", "sepenuhnya",
+        "completely", "dipanaskan", "dibakar", "terurai", "terbentuk"
     ]):
         eq_parts = equation.split('->')
         lhs_formulas = re.findall(r'[A-Z][A-Za-z0-9()]*', eq_parts[0]) if len(eq_parts) >= 1 else []
         rhs_formulas = re.findall(r'[A-Z][A-Za-z0-9()]*', eq_parts[1]) if len(eq_parts) >= 2 else []
-        given_f = next((f for f in lhs_formulas if f in formulas), formulas[0] if formulas else None)
-        target_f = next((f for f in rhs_formulas if f in formulas), rhs_formulas[0] if rhs_formulas else None)
+
+        # FIX BUG A: given_formula = first LHS formula (no filter against soalan formulas[])
+        # Because soalan formulas[] may not contain all equation formulas
+        given_f = lhs_formulas[0] if lhs_formulas else (formulas[0] if formulas else None)
+
+        # FIX BUG B: use smart target detection
+        target_f = _find_target_formula(q, rhs_formulas, lhs_formulas)
+
         if given_f and target_f and given_f != target_f:
-            # Detect if question asks for VOLUME (isipadu) or MASS (jisim)
             asks_volume = any(k in ql for k in [
                 "isipadu", "volume", "dm3", "cm3", "liter", "litre"
             ])
