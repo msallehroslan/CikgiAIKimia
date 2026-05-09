@@ -110,8 +110,27 @@ def get_indexes_for_task(task: str) -> List[str]:
 # ---------------------------------------------------------------------------
 # PROMPTS
 # ---------------------------------------------------------------------------
+def translate_solver_output(text: str, lang: str) -> str:
+    """Translate BM solver headers to English if needed."""
+    if lang != 'EN':
+        return text
+    return (
+        text
+        .replace("Diberi:",     "Given:")
+        .replace("Pengiraan:",  "Calculation:")
+        .replace("Jawapan:",    "Answer:")
+        .replace("Bilangan mol", "Number of moles")
+        .replace("Isipadu",     "Volume")
+        .replace("Jisim molar", "Molar mass")
+        .replace("Jisim",       "Mass")
+        .replace("Kemolaran",   "Molarity")
+        .replace("Nombor pengoksidaan", "Oxidation number")
+        .replace("mol dm⁻³",    "mol dm⁻³")
+    )
+
 
 def build_explanation_prompt(solver_answer: str, lang: str, history: str = "") -> str:
+
     if lang == 'EN':
         return f"""You are Cikgu AI Kimia, SPM Chemistry tutor.
 {history}
@@ -673,7 +692,8 @@ async def answer_question(req: ChatRequest) -> ChatResponse:
                 solver_answer, lang, history_context
             )
             explanation  = await call_llm(explanation_prompt, max_tokens=200)
-            final_answer = solver_answer + "\n\n---\n" + explanation
+            translated_solver = translate_solver_output(solver_answer, lang)
+            final_answer = translated_solver + "\n\n---\n" + explanation
             answer_type  = "calculation"
 
         except Exception as e:
