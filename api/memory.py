@@ -51,22 +51,23 @@ def _get_db():
     global _db
     if _db is None:
         if not firebase_admin._apps:
-            # Load from environment variable (safe — not in repo)
-            cred_json = os.environ.get("FIREBASE_CREDENTIALS", "")
+            # Read from your Render env var name
+            cred_json = (
+                os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON", "") or
+                os.environ.get("FIREBASE_CREDENTIALS", "") or
+                os.environ.get("FIREBASE_CREDENTIALS_PATH", "")
+            )
             if cred_json:
                 try:
                     cred_dict = json.loads(cred_json)
                     cred = credentials.Certificate(cred_dict)
                 except Exception:
-                    # Maybe it's a file path
                     cred = credentials.Certificate(cred_json)
             else:
-                # Fallback to file path
-                cred_path = os.environ.get(
-                    "FIREBASE_CREDENTIALS_PATH", "firebase_credentials.json"
+                raise ValueError(
+                    "No Firebase credentials found. "
+                    "Set GOOGLE_APPLICATION_CREDENTIALS_JSON in Render environment."
                 )
-                cred = credentials.Certificate(cred_path)
-
             firebase_admin.initialize_app(cred)
 
         _db = firestore.client()
