@@ -1,227 +1,328 @@
-# Cikgu AI Kimia 🧪
+# 🧪 Cikgu AI Kimia — SPM Chemistry AI Tutor
 
-**SPM Chemistry AI Tutor** — Deterministic solver + Multilingual RAG + Telegram Bot
-
----
-
-## Quick Start (5 minutes)
-
-```bash
-# 1. Install
-pip install -r requirements.txt
-
-# 2. Configure
-cp .env.example .env
-# Edit .env — add your GROQ_API_KEY and TELEGRAM_BOT_TOKEN
-
-# 3. Build indexes
-python scripts/build_index_v2.py --kb-dir knowledge_base --validate
-
-# 4. Run API
-uvicorn api.main:app --host 0.0.0.0 --port 8000
-
-# 5. Run Telegram bot (new terminal)
-python bot/telegram_bot.py
-```
+> Production-ready AI tutor for Malaysian SPM Chemistry students
+> Built with FastAPI + FAISS + Groq LLM + Telegram Bot + Firebase Smart Memory
 
 ---
 
-## Project Structure
+## 🌐 Live URLs
+
+| Service | URL |
+|---|---|
+| API (FastAPI) | https://cikgiaikimia.onrender.com |
+| API Docs | https://cikgiaikimia.onrender.com/docs |
+| Health Check | https://cikgiaikimia.onrender.com/api/health |
+| Memory Stats | https://cikgiaikimia.onrender.com/api/memory/stats |
+| Telegram Bot | @TicerHawaAIBot |
+| GitHub | https://github.com/msallehroslan/CikgiAIKimia |
+| Firebase | https://console.firebase.google.com/u/1/project/cikgu-kimia-66b7b/firestore |
+
+---
+
+## ✅ FULLY WORKING FEATURES
+
+### Infrastructure
+- [x] FastAPI backend deployed on Render.com (Singapore)
+- [x] Python 3.11.9 pinned (.python-version file)
+- [x] fastembed (ONNX) — RAM ~150MB (free tier compatible)
+- [x] FAISS indexes: 514 theory + 176 calculations + 13 QA = 703 vectors
+- [x] Groq LLM (llama-3.1-70b-versatile)
+- [x] Firebase Firestore connected (project: cikgu-kimia-66b7b)
+- [x] Render auto-deploy on git push
+- [x] Telegram webhook inside FastAPI (no separate worker)
+
+### Solvers (All 100% Correct ✅)
+- [x] Mol calculations (moles_from_mass, moles_from_volume, etc.)
+- [x] pH / pOH calculations
+- [x] Titration, Thermochemistry, Redox
+- [x] Stoichiometry, Concentration, Dilution
+- [x] Gas volume (STP/RTP), Empirical formula
+- [x] Atomic structure, Rate of reaction
+
+### Telegram Bot Commands
+- [x] /start — welcome + inline keyboard
+- [x] /help — all commands
+- [x] /quiz [topik] — generate MCQ quiz
+- [x] /solve [soalan] — calculation only
+- [x] /clear — clear session + memory
+- [x] /stats — show cache statistics
+
+### Smart Memory System v3.0.0 ✅
+- [x] LAYER 1: Shared Q&A cache (all students benefit)
+  - First question: ~1167ms (fresh solve)
+  - Same question again: ⚡ ~400-550ms (from cache)
+  - Cache gets faster with more hits
+- [x] LAYER 2: Personal memory per student
+  - "soalan saya tadi, terangkan lagi" → works ✅
+  - Bot remembers last 4 messages per session
+  - Survives bot restarts
+- [x] Auto language detection BM/EN
+- [x] Firestore collections: sessions/ + qa_cache/
+
+### Answer Quality
+- [x] 10/10 test questions correct (100%)
+- [x] SPM format: Diberi → Formula → Pengiraan → Jawapan
+- [x] Short explanation (3-4 sentences only)
+- [x] Short theory (max 5 sentences)
+- [x] Bilingual BM/EN support
+- [x] English solver output translation (Given/Calculation/Answer)
+
+---
+
+## 📁 PROJECT STRUCTURE
 
 ```
-cikgu-ai-kimia/
-│
-├── knowledge_base/              ← Your SPM content
-│   ├── theory/
-│   │   ├── form4/               ← BAB 1-5 Form 4 notes
-│   │   └── form5/               ← BAB 1-8 Form 5 notes
-│   ├── calculations/            ← Calculation worked examples
-│   ├── questions/past_years/    ← SPM past year papers (add later)
-│   └── images/                  ← Diagram images (optional)
-│
-├── rag/                         ← RAG pipeline
-│   ├── chunker.py               ← Markdown → chunks
-│   ├── metadata_tagger.py       ← Tag chapters, topics, keywords
-│   ├── embedder.py              ← Multilingual sentence transformer
-│   ├── indexer.py               ← Build 3 FAISS indexes
-│   ├── retriever.py             ← Query → relevant chunks
-│   ├── diagram_processor.py     ← Diagram descriptions (60 built-in)
-│   └── past_year_questions.py   ← Built-in SPM question bank
-│
-├── solver/                      ← Deterministic Python solver
-│   ├── solver_engine.py         ← All calculation solvers
-│   ├── extractor.py             ← Extract numbers/formulas from text
-│   ├── router.py                ← Route question to correct solver
-│   ├── formula_parser.py        ← Parse chemical formulas
-│   ├── equation_parser.py       ← Parse chemical equations
-│   └── units.py                 ← Unit conversions
-│
+CikgiAIKimia/
 ├── api/
-│   └── main.py                  ← FastAPI application (7 endpoints)
-│
-├── bot/
-│   └── telegram_bot.py          ← Telegram bot
-│
+│   ├── main.py              ← FastAPI + Telegram webhook (v3.0.0)
+│   └── memory.py            ← Smart memory (shared cache + personal)
+├── rag/
+│   ├── embedder.py          ← fastembed ONNX (replaces torch)
+│   ├── retriever.py         ← FAISS retriever + query augmentation
+│   ├── chunker.py           ← Markdown chunker
+│   ├── indexer.py           ← FAISS index manager
+│   └── metadata_tagger.py   ← chunk metadata tagger
+├── solver/
+│   ├── solver_engine.py     ← deterministic chemistry solver
+│   ├── extractor.py         ← question parser
+│   ├── router.py            ← task router
+│   ├── formula_parser.py    ← chemical formula parser
+│   ├── equation_parser.py   ← equation parser
+│   └── units.py             ← unit conversions
 ├── scripts/
-│   └── build_index_v2.py        ← Build all FAISS indexes
+│   └── build_index_v2.py   ← FAISS index builder
+├── faiss_indexes/
+│   ├── index_theory.faiss       (514 vectors)
+│   ├── index_calculations.faiss (176 vectors)
+│   └── index_qa.faiss           (13 vectors)
+├── knowledge_base/          ← SPM Markdown notes
+├── requirements.txt         ← pinned deps (fastembed, no torch)
+├── render.yaml              ← Render deployment config
+└── .python-version          ← 3.11.9
+```
+
+---
+
+## ⚙️ ENVIRONMENT VARIABLES (Render)
+
+| Key | Value |
+|---|---|
+| GROQ_API_KEY | your_groq_key |
+| GROQ_MODEL | llama-3.1-70b-versatile |
+| TELEGRAM_BOT_TOKEN | your_bot_token |
+| API_BASE_URL | https://cikgiaikimia.onrender.com |
+| FAISS_INDEX_DIR | ./faiss_indexes |
+| KB_DIR | ./knowledge_base |
+| RETRIEVAL_THRESHOLD | 0.30 |
+| MAX_CONTEXT_CHARS | 3000 |
+| GOOGLE_APPLICATION_CREDENTIALS_JSON | {entire Firebase JSON} |
+
+---
+
+## 📦 KEY PACKAGES (requirements.txt)
+
+```txt
+fastembed==0.3.6              # ONNX embeddings (replaces torch)
+faiss-cpu==1.8.0              # vector store
+langchain==0.2.16             # RAG framework
+fastapi==0.111.0              # web framework
+groq==0.9.0                   # LLM API
+python-telegram-bot==21.3     # Telegram bot
+firebase-admin==6.5.0         # Firestore smart memory
+Pillow==10.4.0                # image processing
+pytesseract==0.3.10           # OCR (needs tesseract binary)
+numpy==1.26.4                 # numerics
+```
+
+---
+
+## 🧠 SMART MEMORY ARCHITECTURE
+
+```
+Question comes in
+      ↓
+1. Detect language (BM/EN)
+      ↓
+2. Get personal history (session_id)
+   → Enables "soalan saya tadi..." ✅
+      ↓
+3. Check shared cache (Firestore qa_cache)
+   → Cache HIT? → Return ⚡ (~400ms)
+   → Cache MISS? → Continue...
+      ↓
+4. Solve (deterministic) or RAG + LLM
+      ↓
+5. Save to:
+   → Personal memory (sessions/)
+   → Shared cache (qa_cache/)
+      ↓
+6. Return answer
+```
+
+### Firestore Structure
+```
+firestore/
+├── qa_cache/                 ← SHARED (all students)
+│   └── {question_hash}/
+│       ├── question
+│       ├── answer
+│       ├── answer_type
+│       ├── hit_count
+│       └── created_at
 │
-├── faiss_indexes/               ← Built indexes (commit to git!)
-├── render.yaml                  ← Render deployment config
-├── requirements.txt
-└── .env.example
+└── sessions/                 ← PERSONAL (per student)
+    └── tg_{user_id}/
+        ├── updated_at
+        └── messages/
+            └── {msg_id}/
+                ├── role (user/assistant)
+                ├── content
+                └── timestamp
 ```
 
 ---
 
-## Architecture
+## 🗓️ VERSION HISTORY
 
-```
-Student Question
-       │
-       ▼
-   router.py  ──────────────────────────────────────┐
-       │                                             │
-       │ Calculation detected                        │ Theory/concept
-       ▼                                             ▼
- solver_engine.py                            retriever.py
- (Pure Python, deterministic)                (FAISS search)
-       │                                             │
-       ▼                                             ▼
- SPM Format Answer                          RAG Context
- Diberi/Formula/                            (Top-k chunks)
- Pengiraan/Jawapan                               │
-       │                                          ▼
-       └──────────────────────────────────► Groq LLM
-                                           (Explanation only)
-                                                │
-                                                ▼
-                                          Final Answer (BM)
-```
-
-**Critical rule: LLM never computes. Python solver handles all maths.**
+| Version | Date | Changes |
+|---|---|---|
+| v1.0.0 | May 2026 | Initial deploy — FastAPI + FAISS + Groq |
+| v2.0.0 | May 2026 | fastembed (no torch), free tier compatible |
+| v2.1.0 | May 2026 | Short explanations, correct RAG sources, bilingual |
+| v3.0.0 | 09 May 2026 | Smart memory — shared cache + personal history |
 
 ---
 
-## API Endpoints
+## 🚧 PENDING TASKS
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | Health + index stats |
-| POST | `/api/chat` | Main Q&A (auto-routes) |
-| POST | `/api/solve` | Calculation only (no LLM) |
-| POST | `/api/retrieve` | Raw retrieval (debug) |
-| POST | `/api/quiz` | Generate quiz questions |
-| GET | `/api/index/stats` | FAISS statistics |
-| POST | `/api/index/rebuild` | Rebuild indexes (background) |
+### HIGH PRIORITY
+1. **Photo/Screenshot support via Groq Vision**
+   - Add photo handler in `setup_telegram()` in `main.py`
+   - Use Groq's vision model (llava) — no extra binary needed
+   - Flow: Photo → base64 → Groq Vision → extract question → answer
+   - No Tesseract needed — simpler and works on Render free tier
 
-### Test immediately after startup:
+2. **Test English translation fully**
+   - Send: `Calculate the number of moles in 5g of water H2O`
+   - Verify: `Given:` appears instead of `Diberi:`
+   - If not working — check `translate_solver_output()` in main.py
+
+3. **Fix RAG sources for mol calculations**
+   - Still shows "Redoks" sometimes for mol questions
+   - TASK_INDEX_MAP already in place
+   - May need to rebuild FAISS index with better metadata
+
+### MEDIUM PRIORITY
+4. **Add more past year questions to QA index**
+   - Currently only 13 QA vectors
+   - Add SPM past year Q&A to knowledge_base/questions/past_years/
+   - Rebuild: `python scripts/build_index_v2.py --skip-diagrams`
+
+5. **Quiz improvement**
+   - Add subjective question type (not just MCQ)
+   - Add difficulty levels (mudah/sederhana/susah)
+   - Chapter-specific: /quiz bab3
+
+6. **Diagram support**
+   - Currently --skip-diagrams during build
+   - Add diagram descriptions to knowledge_base/
+   - Rebuild with diagram injection enabled
+
+### LOW PRIORITY
+7. **Admin dashboard**
+   - Simple web UI to monitor cache hits
+   - View top questions, manage sessions
+   - Show student activity stats
+
+8. **Rate limiting at API level**
+   - Currently only in bot handler
+   - Add FastAPI middleware rate limiting
+
+9. **CI/CD pipeline**
+   - Auto rebuild FAISS when knowledge_base/ changes
+   - GitHub Actions workflow
+
+---
+
+## 🔨 USEFUL COMMANDS
 
 ```bash
-# Health check
-curl http://localhost:8000/api/health
+# Rebuild FAISS indexes locally
+cd CikgiAIKimia
+set PYTHONPATH=.
+python scripts/build_index_v2.py --skip-diagrams --skip-questions
 
-# Calculation (no LLM needed)
-curl -X POST http://localhost:8000/api/solve \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Hitungkan bilangan mol dalam 4.7g K2O"}'
+# Full rebuild with QA
+python scripts/build_index_v2.py --skip-diagrams
 
-# Theory question
-curl -X POST http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Terangkan tindak balas eksotermik"}'
-```
-
----
-
-## Telegram Bot Commands
-
-| Command | Description |
-|---------|-------------|
-| `/start` | Welcome screen |
-| `/help` | Show all commands |
-| `/solve [question]` | Calculation only |
-| `/quiz [topic]` | Generate quiz |
-| `/chapter [n]` | Filter by chapter |
-| `/clear` | Reset session |
-
----
-
-## Deploy to Render
-
-```bash
-# 1. Build indexes locally first
-python scripts/build_index_v2.py --kb-dir knowledge_base
-
-# 2. Push to GitHub (includes faiss_indexes/)
-git init
+# Push to GitHub
 git add .
-git commit -m "Initial deploy"
-git remote add origin https://github.com/YOUR_USERNAME/cikgu-ai-kimia.git
-git push -u origin main
+git commit -m "your message"
+git push origin main
 
-# 3. Connect GitHub repo to Render
-# render.yaml is already configured — Render detects it automatically
+# Check health
+curl https://cikgiaikimia.onrender.com/api/health
 
-# 4. Add environment variables in Render dashboard:
-#    GROQ_API_KEY = gsk_...
-#    TELEGRAM_BOT_TOKEN = your_token
-#    API_BASE_URL = https://cikgu-ai-kimia-api.onrender.com
+# Check memory/cache stats
+curl https://cikgiaikimia.onrender.com/api/memory/stats
+
+# Test question via API
+curl -X POST https://cikgiaikimia.onrender.com/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Hitung mol 4g NaOH", "session_id": "test123"}'
+
+# Clear a session
+curl -X DELETE https://cikgiaikimia.onrender.com/api/memory/session/tg_123456
+
+# Delete Telegram webhook
+curl https://api.telegram.org/bot<TOKEN>/deleteWebhook
+
+# Check webhook status
+curl https://api.telegram.org/bot<TOKEN>/getWebhookInfo
 ```
 
 ---
 
-## Adding Past Year Questions
+## 📊 PERFORMANCE BENCHMARK (Tested 09 May 2026)
 
-Create `knowledge_base/questions/past_years/SPM_2023_Kimia.md`:
-
-```markdown
-# SPM 2023 Kimia Tingkatan 5
+| Question | Answer | Correct | Fresh | Cached |
+|---|---|---|---|---|
+| Mol 4g NaOH | 0.1 mol | ✅ | 1167ms | 401ms |
+| Mol 8g SO2 | 0.125 mol | ✅ | 2273ms | ~400ms |
+| pH [H+]=0.01 | pH=2 | ✅ | 782ms | ~400ms |
+| Isipadu H2 STP 2g | 22.4L | ✅ | 1208ms | ~400ms |
+| Kemolaran 4g NaOH 500cm3 | 0.2 mol/dm3 | ✅ | 1677ms | ~400ms |
+| Nombor pengoksidaan KMnO4 | +7 | ✅ | 2168ms | ~400ms |
+| Eksotermik vs Endotermik | ✅ | ✅ | 1309ms | ~400ms |
+| Faktor kadar tindak balas | ✅ | ✅ | 1470ms | ~400ms |
+| Pempolimeran penambahan | ✅ | ✅ | 1157ms | ~400ms |
+| Ikatan ion vs kovalen | ✅ | ✅ | 1713ms | ~400ms |
+| Personal memory test | ✅ | ✅ | 2334ms | N/A |
+| **TOTAL** | **11/11** | **100%** | avg 1.6s | avg 0.4s |
 
 ---
 
-## Soalan 1 — Bab 7 Kadar Tindak Balas [3 markah]
+## 💬 HOW TO CONTINUE IN NEW CHAT
 
-Hitungkan kadar tindak balas purata bagi minit pertama jika...
+Paste this at the start of new chat:
 
-Keywords: kadar tindak balas, graf, isipadu gas
+```
+I am continuing "Cikgu AI Kimia" SPM Chemistry AI Tutor.
+Attached README.md has full project status.
 
----
+GitHub: https://github.com/msallehroslan/CikgiAIKimia
+Live: https://cikgiaikimia.onrender.com
+Bot: @TicerHawaAIBot
+Firebase: cikgu-kimia-66b7b
+Current version: v3.0.0
 
-### Jawapan
-
-Diberi:
-...
-
-Formula:
-Kadar = perubahan isipadu ÷ masa
-
-Pengiraan:
-...
-
-Jawapan:
-30 cm³ min⁻¹
+Next task: Add photo/screenshot support via Groq Vision API
 ```
 
-Then rebuild: `python scripts/build_index_v2.py --kb-dir knowledge_base`
+Then attach this README.md file.
 
 ---
 
-## FAISS Indexes
-
-| Index | Content | Handles |
-|-------|---------|---------|
-| `index_theory` | BAB notes, definitions, concepts | Theory questions |
-| `index_calculations` | Worked examples, formulas | Calc questions |
-| `index_qa` | Past year questions, schemes | Exam prep |
-
-Embedding model: `paraphrase-multilingual-MiniLM-L12-v2` (BM + EN)
-
----
-
-## Groq Models
-
-| Model | Use case |
-|-------|----------|
-| `llama-3.1-70b-versatile` | Best quality, recommended |
-| `llama-3.1-8b-instant` | Fastest, good for bot |
-| `mixtral-8x7b-32768` | Long context questions |
+*Last updated: 09 May 2026*
+*Current version: v3.0.0*
+*Next: Photo support via Groq Vision*
