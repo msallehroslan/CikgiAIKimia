@@ -10,9 +10,10 @@ Production-ready REST API with:
   - /api/index/stats — FAISS index statistics
   - /webhook         — Telegram webhook endpoint
 
-Architecture:
-  Question → Router → Calculation Solver (deterministic)
-                   → RAG Retrieval → LLM (theory/explanation)
+Fixes v2:
+  - Always show step-by-step explanation for calculations
+  - Fixed RAG source routing per task type
+  - Auto language detection (BM/EN) for responses
 
 Author: Cikgu AI Kimia Project
 """
@@ -31,7 +32,6 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# Adjust Python path so rag/ and solver/ modules are importable
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR / "rag"))
 sys.path.insert(0, str(BASE_DIR / "solver"))
@@ -56,6 +56,72 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "")
 _app_state: Dict[str, Any] = {}
 
 # ---------------------------------------------------------------------------
+# FIX 3: LANGUAGE DETECTION
+# ---------------------------------------------------------------------------
+
+def detect_language(text: str) -> str:
+    """
+    Detect if question is in English or Bahasa Malaysia.
+    Returns 'EN' or 'BM'.
+    """
+    en_keywords = [
+        'what', 'why', 'how', 'explain', 'calculate', 'find', 'determine',
+        'define', 'describe', 'compare', 'difference', 'between', 'state',
+        'list', 'give', 'write', 'draw', 'show', 'the', 'is', 'are', 'of',
+        'in', 'and', 'with', 'from', 'number', 'moles', 'mass', 'volume',
+        'concentration', 'reaction', 'acid', 'base', 'salt', 'bond',
+    ]
+    text_lower = text.lower()
+    words = text_lower.split()
+    en_count = sum(1 for w in words if w in en_keywords)
+    # If more than 2 English keywords found, treat as English
+    return 'EN' if en_count >= 2 else 'BM'
+
+
+# ---------------------------------------------------------------------------
+# FIX 2: TASK TO INDEX MAPPING
+# ---------------------------------------------------------------------------
+
+TASK_INDEX_MAP = {
+    # Mol calculations → index_calculations
+    "moles_from_mass":         ["index_calculations"],
+    "moles_from_volume":       ["index_calculations"],
+    "mass_from_moles":         ["index_calculations"],
+    "volume_from_moles":       ["index_calculations"],
+    "mass_from_volume":        ["index_calculations"],
+    "volume_from_mass":        ["index_calculations"],
+    "particles_from_moles":    ["index_calculations"],
+    "particles_from_mass":     ["index_calculations"],
+    "particles_from_volume":   ["index_calculations"],
+    "molarity_from_mass":      ["index_calculations"],
+    "concentration_g_dm3":     ["index_calculations"],
+    "dilution":                ["index_calculations"],
+    "stoichiometry_mass_to_mass": ["index_calculations"],
+    "empirical_formula":       ["index_calculations"],
+    "jmr":                     ["index_calculations"],
+    # Acid/Base → index_calculations + index_theory
+    "ph_from_h":               ["index_calculations", "index_theory"],
+    "h_from_ph":               ["index_calculations", "index_theory"],
+    "poh_from_oh":             ["index_calculations", "index_theory"],
+    "ph_from_poh":             ["index_calculations", "index_theory"],
+    "titration_find_volume":   ["index_calculations", "index_theory"],
+    # Thermochemistry → index_calculations
+    "calorimetry":             ["index_calculations"],
+    "delta_h_from_calorimetry": ["index_calculations"],
+    # Redox → index_calculations
+    "oxidation_number":        ["index_calculations"],
+    # Rate → index_calculations
+    "rate_average":            ["index_calculations"],
+    # Atomic structure → index_calculations
+    "ar_from_abundance":       ["index_calculations"],
+    "subatomic":               ["index_calculations"],
+}
+
+def get_indexes_for_task(task: str) -> List[str]:
+    return TASK_INDEX_MAP.get(task, ["index_calculations", "index_theory"])
+
+
+# ---------------------------------------------------------------------------
 # TELEGRAM BOT SETUP
 # ---------------------------------------------------------------------------
 
@@ -78,28 +144,31 @@ async def setup_telegram(app_instance):
         from telegram.constants import ChatAction, ParseMode
         import httpx
 
-        # ── Helpers ────────────────────────────────────────────────────────
-
         def format_answer(answer: str, answer_type: str) -> str:
             emoji = {"calculation": "🧮", "theory": "📚", "fallback": "ℹ️"}.get(answer_type, "💬")
             lines = []
             for line in answer.split('\n'):
-                if line.strip().startswith(('Diberi:', 'Formula:', 'Pengiraan:', 'Jawapan:')):
+                if line.strip().startswith(('Diberi:', 'Formula:', 'Pengiraan:', 'Jawapan:',
+                                            'Given:', 'Formula:', 'Calculation:', 'Answer:')):
                     lines.append(f"*{line.strip()}*")
                 else:
                     lines.append(line)
             return f"{emoji} *Jawapan Cikgu AI Kimia*\n\n" + '\n'.join(lines)
 
         async def call_api(question: str, session_id: str) -> dict:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            lang = detect_language(question)
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     f"http://localhost:{os.environ.get('PORT', 10000)}/api/chat",
-                    json={"question": question, "session_id": session_id, "top_k": 5},
+                    json={
+                        "question": question,
+                        "session_id": session_id,
+                        "language": lang,
+                        "top_k": 5,
+                    },
                 )
                 resp.raise_for_status()
                 return resp.json()
-
-        # ── Command Handlers ───────────────────────────────────────────────
 
         async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [
@@ -118,10 +187,10 @@ async def setup_telegram(app_instance):
                 "• Pengiraan kimia SPM (langkah demi langkah)\n"
                 "• Teori dan konsep kimia\n"
                 "• Soalan latihan dan kuiz\n\n"
-                "Taip soalan anda dalam Bahasa Malaysia atau English.\n\n"
+                "Taip soalan dalam *Bahasa Malaysia atau English*.\n\n"
                 "Contoh:\n"
                 "_Hitungkan bilangan mol dalam 4.7 g K₂O_\n"
-                "_Terangkan perbezaan eksotermik dan endotermik_",
+                "_Calculate the pH if H+ concentration is 0.01 mol/dm3_",
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
@@ -134,6 +203,7 @@ async def setup_telegram(app_instance):
                 "/quiz [topik] — Jana soalan kuiz\n"
                 "/solve [soalan] — Pengiraan sahaja\n"
                 "/clear — Kosongkan tetapan sesi\n\n"
+                "*Bahasa:* BM dan English disokong\n\n"
                 "*Format jawapan pengiraan:*\n"
                 "Diberi: → Formula: → Pengiraan: → Jawapan:",
                 parse_mode=ParseMode.MARKDOWN,
@@ -143,7 +213,7 @@ async def setup_telegram(app_instance):
             topic = " ".join(context.args) if context.args else "Konsep Mol"
             await update.message.chat.send_action(ChatAction.TYPING)
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                async with httpx.AsyncClient(timeout=60.0) as client:
                     resp = await client.post(
                         f"http://localhost:{os.environ.get('PORT', 10000)}/api/quiz",
                         json={"topic": topic, "num_questions": 3, "language": "BM"},
@@ -175,7 +245,7 @@ async def setup_telegram(app_instance):
                 return
             await update.message.chat.send_action(ChatAction.TYPING)
             try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
+                async with httpx.AsyncClient(timeout=60.0) as client:
                     resp = await client.post(
                         f"http://localhost:{os.environ.get('PORT', 10000)}/api/solve",
                         json={"question": question},
@@ -205,12 +275,13 @@ async def setup_telegram(app_instance):
                 await query.edit_message_text("Taip: /quiz [topik]\nContoh: /quiz Konsep Mol")
             elif data == "mode_theory":
                 await query.edit_message_text(
-                    "📚 *Mod Teori*\nTaip soalan teori anda.",
+                    "📚 *Mod Teori*\nTaip soalan teori anda.\nContoh: _Apakah maksud pH?_",
                     parse_mode=ParseMode.MARKDOWN,
                 )
             elif data == "mode_calc":
                 await query.edit_message_text(
-                    "🧮 *Mod Pengiraan*\nTaip soalan pengiraan anda.",
+                    "🧮 *Mod Pengiraan*\nTaip soalan pengiraan anda.\n"
+                    "Contoh: _Hitungkan bilangan mol dalam 4.7 g K₂O_",
                     parse_mode=ParseMode.MARKDOWN,
                 )
 
@@ -229,7 +300,6 @@ async def setup_telegram(app_instance):
 
                 formatted = format_answer(answer, answer_type)
 
-                # Add sources
                 src_lines = [f"• {s.get('topic','')}" for s in sources[:2] if s.get('topic')]
                 if src_lines:
                     formatted += "\n\n📖 _Sumber: " + ", ".join(src_lines) + "_"
@@ -245,8 +315,6 @@ async def setup_telegram(app_instance):
                 logger.error(f"Bot message error: {e}")
                 await update.message.reply_text("Maaf, ralat berlaku. Sila cuba lagi.")
 
-        # ── Build Application ──────────────────────────────────────────────
-
         telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
         telegram_app.add_handler(CommandHandler("start", cmd_start))
         telegram_app.add_handler(CommandHandler("help", cmd_help))
@@ -259,7 +327,6 @@ async def setup_telegram(app_instance):
         await telegram_app.initialize()
         _app_state["telegram_app"] = telegram_app
 
-        # ── Set Webhook ────────────────────────────────────────────────────
         webhook_url = f"{API_BASE_URL}/webhook"
         await telegram_app.bot.set_webhook(
             url=webhook_url,
@@ -297,12 +364,10 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to load components: {e}")
         _app_state["error"] = str(e)
 
-    # Setup Telegram webhook
     await setup_telegram(app)
 
     yield
 
-    # Shutdown telegram
     if "telegram_app" in _app_state:
         await _app_state["telegram_app"].shutdown()
 
@@ -317,7 +382,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Cikgu AI Kimia",
     description="SPM Chemistry AI Tutor — RAG + Deterministic Solver",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -336,7 +401,7 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     question: str = Field(..., min_length=3, max_length=1000)
-    language: str = Field(default="BM")
+    language: str = Field(default="auto")  # auto, BM, EN
     chapter_filter: Optional[int] = None
     tingkatan_filter: Optional[int] = None
     top_k: int = Field(default=5, ge=1, le=10)
@@ -353,6 +418,7 @@ class ChatResponse(BaseModel):
     context_found: bool
     processing_time_ms: float
     session_id: Optional[str]
+    language: str
 
 
 class SolveRequest(BaseModel):
@@ -424,50 +490,40 @@ async def call_llm(prompt: str, max_tokens: int = 800) -> str:
 
 
 # ---------------------------------------------------------------------------
-# CORE ANSWER PIPELINE
+# FIX 3: LANGUAGE-AWARE EXPLANATION PROMPT
 # ---------------------------------------------------------------------------
 
-async def answer_question(req: ChatRequest) -> ChatResponse:
-    t0 = time.time()
+def build_explanation_prompt(solver_answer: str, lang: str) -> str:
+    if lang == 'EN':
+        return f"""You are Cikgu AI Kimia, an SPM Chemistry tutor.
 
-    route_fn = _app_state.get("route_fn")
-    solve_fn = _app_state.get("solve_fn")
-    retriever = _app_state.get("retriever")
+The following calculation has been solved:
 
-    if not all([route_fn, solve_fn, retriever]):
-        raise HTTPException(503, detail="Components not loaded.")
+{solver_answer}
 
-    task, data = route_fn(req.question)
-    if task == "jmr" and data is None:
-        import re
-        formulas = re.findall(r"[A-Z][A-Za-z0-9()]+", req.question)
-        bad = {"Hitungkan", "Tentukan", "Berapakah", "Jisim", "Molar", "Formula"}
-        formulas = [f for f in formulas if f not in bad]
-        if formulas:
-            data = {"task": "jmr", "formula": formulas[0], "formulas": formulas}
+Your task: Explain EVERY STEP of the calculation above to an SPM student in ENGLISH.
 
-    solver_used = False
-    context_found = False
-    sources = []
-    retrieval_scores = []
+Format:
+**Step-by-Step Explanation:**
 
-    # ── Calculation path ───────────────────────────────────────────────────
-    if task != "unknown" and data is not None:
-        try:
-            solver_answer = solve_fn(task, data)
-            solver_used = True
+Step 1: [step name]
+→ [explain WHAT was done and WHY]
 
-            rag_results = retriever.retrieve_for_calculation(req.question, k=2)
-            if rag_results and retriever.is_sufficient_context(rag_results, min_score=0.35):
-                context_found = True
-                sources = [
-                    {"chunk_id": r.chunk_id, "topic": r.topic,
-                     "content_type": r.content_type, "score": round(r.score, 4)}
-                    for r in rag_results
-                ]
-                retrieval_scores = [r.score for r in rag_results]
+Step 2: [step name]
+→ [explain WHAT was done and WHY]
 
-                explanation_prompt = f"""Kamu adalah Cikgu AI Kimia, tutor kimia SPM yang pakar.
+**Key Concept:**
+→ [explain the main concept in 2-3 sentences]
+
+**SPM Tip:**
+→ [important tip to remember]
+
+RULES:
+- Use clear English suitable for SPM students
+- Explain WHY each step is done, not just WHAT
+- Do NOT repeat the calculation — EXPLAIN only"""
+    else:
+        return f"""Kamu adalah Cikgu AI Kimia, tutor kimia SPM yang pakar.
 
 Pengiraan berikut telah diselesaikan:
 
@@ -495,10 +551,102 @@ PERATURAN:
 - Terangkan MENGAPA setiap langkah dilakukan
 - Jangan ulang semula pengiraan — TERANGKAN sahaja"""
 
-                explanation = await call_llm(explanation_prompt, max_tokens=600)
-                final_answer = solver_answer + "\n\n---\n" + explanation
-            else:
-                final_answer = solver_answer
+
+def build_theory_prompt(context: str, question: str, lang: str) -> str:
+    if lang == 'EN':
+        return f"""You are Cikgu AI Kimia, an expert SPM Chemistry tutor.
+
+IMPORTANT RULES:
+1. Answer ONLY based on the reference notes below.
+2. Answer in clear, complete English sentences.
+3. Use proper SPM Chemistry terminology.
+4. Include relevant examples from the notes.
+5. Do NOT fabricate facts or formulas not in the notes.
+
+REFERENCE NOTES:
+{context}
+
+STUDENT QUESTION:
+{question}"""
+    else:
+        return f"""Kamu adalah Cikgu AI Kimia, tutor kimia SPM yang pakar.
+
+PERATURAN PENTING:
+1. Jawab HANYA berdasarkan petikan nota yang diberikan di bawah.
+2. Jawab dalam bentuk ayat yang jelas dan lengkap dalam Bahasa Malaysia.
+3. Kekalkan terminologi Bahasa Malaysia SPM.
+4. Sertakan contoh yang relevan daripada nota.
+5. JANGAN reka fakta atau formula yang tidak ada dalam nota.
+
+NOTA RUJUKAN:
+{context}
+
+SOALAN PELAJAR:
+{question}"""
+
+
+# ---------------------------------------------------------------------------
+# CORE ANSWER PIPELINE
+# ---------------------------------------------------------------------------
+
+async def answer_question(req: ChatRequest) -> ChatResponse:
+    t0 = time.time()
+
+    route_fn = _app_state.get("route_fn")
+    solve_fn = _app_state.get("solve_fn")
+    retriever = _app_state.get("retriever")
+
+    if not all([route_fn, solve_fn, retriever]):
+        raise HTTPException(503, detail="Components not loaded.")
+
+    # FIX 3: Detect language
+    lang = req.language
+    if lang == "auto" or lang not in ("BM", "EN"):
+        lang = detect_language(req.question)
+
+    task, data = route_fn(req.question)
+    if task == "jmr" and data is None:
+        import re
+        formulas = re.findall(r"[A-Z][A-Za-z0-9()]+", req.question)
+        bad = {"Hitungkan", "Tentukan", "Berapakah", "Jisim", "Molar", "Formula",
+               "Calculate", "Find", "Determine", "The", "What"}
+        formulas = [f for f in formulas if f not in bad]
+        if formulas:
+            data = {"task": "jmr", "formula": formulas[0], "formulas": formulas}
+
+    solver_used = False
+    context_found = False
+    sources = []
+    retrieval_scores = []
+
+    # ── Calculation path ───────────────────────────────────────────────────
+    if task != "unknown" and data is not None:
+        try:
+            solver_answer = solve_fn(task, data)
+            solver_used = True
+
+            # FIX 2: Use correct index based on task type
+            target_indexes = get_indexes_for_task(task)
+            rag_results = retriever.retrieve(
+                query=req.question,
+                k=2,
+                index_names=target_indexes,
+            )
+
+            if rag_results:
+                context_found = True
+                sources = [
+                    {"chunk_id": r.chunk_id, "topic": r.topic,
+                     "content_type": r.content_type, "score": round(r.score, 4)}
+                    for r in rag_results
+                ]
+                retrieval_scores = [r.score for r in rag_results]
+
+            # FIX 1: ALWAYS explain — no score threshold check
+            # FIX 3: Use language-aware prompt
+            explanation_prompt = build_explanation_prompt(solver_answer, lang)
+            explanation = await call_llm(explanation_prompt, max_tokens=600)
+            final_answer = solver_answer + "\n\n---\n" + explanation
 
             elapsed = (time.time() - t0) * 1000
             return ChatResponse(
@@ -508,6 +656,7 @@ PERATURAN:
                 context_found=context_found,
                 processing_time_ms=round(elapsed, 1),
                 session_id=req.session_id,
+                language=lang,
             )
 
         except Exception as e:
@@ -529,15 +678,32 @@ PERATURAN:
 
     if retriever.is_sufficient_context(rag_results, min_score=0.25):
         context_found = True
-        from retriever import build_rag_prompt
-        prompt = build_rag_prompt(req.question, rag_results, max_context_chars=MAX_CONTEXT_CHARS)
+        # Build context string
+        context = ""
+        chars_used = 0
+        for i, r in enumerate(rag_results, 1):
+            block = r.context_block
+            if chars_used + len(block) > MAX_CONTEXT_CHARS:
+                break
+            context += f"\n--- Petikan {i} (Skor: {r.score:.2f}) ---\n{block}\n"
+            chars_used += len(block)
+
+        # FIX 3: Language-aware theory prompt
+        prompt = build_theory_prompt(context.strip(), req.question, lang)
         answer = await call_llm(prompt, max_tokens=700)
         answer_type = "theory"
     else:
-        answer = (
-            "Maaf, soalan ini tidak terdapat dalam nota kimia saya. "
-            "Sila rujuk buku teks SPM atau tanya guru kamu."
-        )
+        # FIX 3: Language-aware fallback message
+        if lang == 'EN':
+            answer = (
+                "Sorry, this question is not found in my chemistry notes. "
+                "Please refer to your SPM textbook or ask your teacher for more accurate information."
+            )
+        else:
+            answer = (
+                "Maaf, soalan ini tidak terdapat dalam nota kimia saya. "
+                "Sila rujuk buku teks SPM atau tanya guru kamu untuk maklumat yang lebih tepat."
+            )
         answer_type = "fallback"
 
     elapsed = (time.time() - t0) * 1000
@@ -547,6 +713,7 @@ PERATURAN:
         solver_used=False, context_found=context_found,
         processing_time_ms=round(elapsed, 1),
         session_id=req.session_id,
+        language=lang,
     )
 
 
@@ -556,7 +723,7 @@ PERATURAN:
 
 @app.get("/", tags=["Root"])
 async def root():
-    return {"message": "Cikgu AI Kimia API", "version": "1.0.0", "status": "ok"}
+    return {"message": "Cikgu AI Kimia API", "version": "2.0.0", "status": "ok"}
 
 
 @app.get("/api/health", response_model=HealthResponse, tags=["Health"])
@@ -668,8 +835,17 @@ async def generate_quiz(req: QuizRequest):
     if not results:
         raise HTTPException(404, f"Tiada kandungan untuk topik: {req.topic}")
 
-    context = retriever.build_context(results, max_chars=2500)
-    quiz_prompt = f"""Kamu adalah Cikgu AI Kimia. Berdasarkan nota berikut, buat {req.num_questions} soalan {req.question_type.upper()} dalam Bahasa Malaysia.
+    context = ""
+    chars = 0
+    for i, r in enumerate(results, 1):
+        block = r.context_block
+        if chars + len(block) > 2500:
+            break
+        context += f"\n--- Petikan {i} ---\n{block}\n"
+        chars += len(block)
+
+    lang_instruction = "in English" if req.language == "EN" else "dalam Bahasa Malaysia"
+    quiz_prompt = f"""Kamu adalah Cikgu AI Kimia. Berdasarkan nota berikut, buat {req.num_questions} soalan {req.question_type.upper()} {lang_instruction}.
 
 NOTA:
 {context}
@@ -687,7 +863,8 @@ FORMAT (JSON sahaja, tiada teks lain):
         quiz_data = {"raw": raw, "parse_error": str(e)}
 
     return {"topic": req.topic, "question_type": req.question_type,
-            "num_questions": req.num_questions, "quiz": quiz_data, "sources_used": len(results)}
+            "num_questions": req.num_questions, "quiz": quiz_data,
+            "sources_used": len(results), "language": req.language}
 
 
 @app.get("/api/index/stats", tags=["Admin"])
