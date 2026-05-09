@@ -1,0 +1,41 @@
+# ============================================================
+# Cikgu AI Kimia — Requirements
+# Python: 3.11.9
+# Platform: Render.com (Singapore) — Free Tier Compatible
+# RAM: ~250MB (fastembed replaces torch + sentence-transformers)
+# ============================================================
+
+# ─── RAG & Vector Store ──────────────────────────────────────
+faiss-cpu==1.8.0
+langchain==0.2.16
+langchain-community==0.2.16
+
+# ─── Embeddings (ONNX — NO torch, NO GPU needed) ─────────────
+fastembed==0.3.6
+
+# ─── FastAPI ─────────────────────────────────────────────────
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+pydantic==2.7.4
+python-multipart==0.0.9
+httpx==0.27.0
+
+# ─── LLM ─────────────────────────────────────────────────────
+groq==0.9.0
+openai==1.35.0
+
+# ─── Telegram Bot ────────────────────────────────────────────
+python-telegram-bot[webhooks]==21.3
+
+# ─── OCR ─────────────────────────────────────────────────────
+pytesseract==0.3.10
+Pillow==10.4.0
+
+# ─── Firebase ────────────────────────────────────────────────
+firebase-admin==6.5.0
+
+# ─── Utilities ───────────────────────────────────────────────
+numpy==1.26.4
+tqdm==4.66.4
+python-dotenv==1.0.1
+aiofiles==23.2.1

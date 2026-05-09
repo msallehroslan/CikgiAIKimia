@@ -1,0 +1,444 @@
+[
+  {
+    "chunk_id": "spm_2022_bab3_t4_struktur_0000",
+    "source_file": "spm_2022.md",
+    "content_type": "qa_scheme",
+    "chapter": 3,
+    "tingkatan": 4,
+    "topic": "Konsep Mol",
+    "subtopic": "Mol dan Jisim",
+    "content": "Soalan SPM 2022 (Bab 3, Tingkatan 4):\n\nHitungkan bilangan mol bagi 11.2 g besi, Fe. [Ar: Fe = 56]\n\nJawapan / Skema Pemarkahan:\nDiberi:\nJisim besi, m = 11.2 g\nJisim atom relatif Fe = 56\n\nFormula:\nn = m ÷ Ar\n\nPengiraan:\nn = 11.2 ÷ 56\nn = 0.2 mol\n\nJawapan:\nBilangan mol besi = 0.2 mol",
+    "embed_text": "Soalan SPM kimia: Hitungkan bilangan mol bagi 11.2 g besi, Fe. [Ar: Fe = 56]\nTopik: Konsep Mol\nSubtopik: Mol dan Jisim\nKata kunci: mol, jisim, besi, jisim atom relatif, mole, mass, iron, relative atomic mass\nSoalan SPM 2022 (Bab 3, Tingkatan 4):\n\nHitungkan bilangan mol bagi 11.2 g besi, Fe. [Ar: Fe = 56]\n\nJawapan / Skema Pemarkahan:\nDiberi:\nJisim besi, m = 11.2 g\nJisim atom relatif Fe = 56\n\nFormula:\nn = m ÷ Ar\n\nPengiraan:\nn = 11.2 ÷ 56\nn = 0.2 mol\n\nJawapan:\nBilangan mol besi = 0.2 mol",
+    "keywords_bm": [
+      "mol",
+      "jisim",
+      "besi",
+      "jisim atom relatif"
+    ],
+    "keywords_en": [
+      "mole",
+      "mass",
+      "iron",
+      "relative atomic mass"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [],
+    "has_worked_example": true,
+    "has_diagram": false,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2022,
+    "question_type": "struktur",
+    "marks": 2
+  },
+  {
+    "chunk_id": "spm_2021_bab3_t4_struktur_0001",
+    "source_file": "spm_2021.md",
+    "content_type": "qa_scheme",
+    "chapter": 3,
+    "tingkatan": 4,
+    "topic": "Konsep Mol",
+    "subtopic": "Mol dan Bilangan Zarah",
+    "content": "Soalan SPM 2021 (Bab 3, Tingkatan 4):\n\nBerapakah bilangan atom dalam 0.5 mol kuprum, Cu? [NA = 6.02 × 10²³ mol⁻¹]\n\nJawapan / Skema Pemarkahan:\nDiberi:\nBilangan mol Cu = 0.5 mol\nNA = 6.02 × 10²³ mol⁻¹\n\nFormula:\nBilangan atom = n × NA\n\nPengiraan:\nBilangan atom = 0.5 × 6.02 × 10²³\nBilangan atom = 3.01 × 10²³ atom\n\nJawapan:\nBilangan atom kuprum = 3.01 × 10²³ atom",
+    "embed_text": "Soalan SPM kimia: Berapakah bilangan atom dalam 0.5 mol kuprum, Cu? [NA = 6.02 × 10²³ mol⁻¹]\nTopik: Konsep Mol\nSubtopik: Mol dan Bilangan Zarah\nKata kunci: bilangan atom, mol, nombor avogadro, kuprum, number of atoms, mole, avogadro, copper\nSoalan SPM 2021 (Bab 3, Tingkatan 4):\n\nBerapakah bilangan atom dalam 0.5 mol kuprum, Cu? [NA = 6.02 × 10²³ mol⁻¹]\n\nJawapan / Skema Pemarkahan:\nDiberi:\nBilangan mol Cu = 0.5 mol\nNA = 6.02 × 10²³ mol⁻¹\n\nFormula:\nBilangan atom = n × NA\n\nPengiraan:\nBilangan atom = 0.5 × 6.02 × 10²³\nBilangan atom = 3.01 × 10²³ atom\n\nJawapan:\nBilangan atom kuprum = 3.01 × 10²³ atom",
+    "keywords_bm": [
+      "bilangan atom",
+      "mol",
+      "nombor avogadro",
+      "kuprum"
+    ],
+    "keywords_en": [
+      "number of atoms",
+      "mole",
+      "avogadro",
+      "copper"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [],
+    "has_worked_example": true,
+    "has_diagram": false,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2021,
+    "question_type": "struktur",
+    "marks": 2
+  },
+  {
+    "chunk_id": "spm_2023_bab3_t4_struktur_0002",
+    "source_file": "spm_2023.md",
+    "content_type": "qa_scheme",
+    "chapter": 3,
+    "tingkatan": 4,
+    "topic": "Konsep Mol",
+    "subtopic": "Stoikiometri",
+    "content": "Soalan SPM 2023 (Bab 3, Tingkatan 4):\n\nHitungkan isipadu gas hidrogen, H₂ pada keadaan bilik yang dihasilkan apabila 1.2 g magnesium bertindak balas dengan asid sulfurik berlebihan. [Ar: Mg = 24; Isipadu molar gas pada keadaan bilik = 24 dm³ mol⁻¹]\nPersamaan: Mg + H₂SO₄ → MgSO₄ + H₂\n\nJawapan / Skema Pemarkahan:\nDiberi:\nJisim Mg = 1.2 g\nAr Mg = 24\nVm = 24 dm³ mol⁻¹\n\nLangkah 1: Mol Mg\nn(Mg) = 1.2 ÷ 24 = 0.05 mol\n\nLangkah 2: Nisbah mol dari persamaan\nMg : H₂ = 1 : 1\nn(H₂) = 0.05 mol\n\nLangkah 3: Isipadu H₂\nV = n × Vm = 0.05 × 24 = 1.2 dm³\n\nJawapan:\nIsipadu gas H₂ = 1.2 dm³",
+    "embed_text": "Soalan SPM kimia: Hitungkan isipadu gas hidrogen, H₂ pada keadaan bilik yang dihasilkan apabila 1.2 g magnesium bertindak balas dengan asid sulfurik berlebihan. [Ar: Mg = 24; Isipadu molar gas pada keadaan bilik = 24 d\nTopik: Konsep Mol\nSubtopik: Stoikiometri\nKata kunci: stoikiometri, isipadu gas, magnesium, nisbah mol, stoichiometry, volume gas, magnesium, mole ratio\nSoalan SPM 2023 (Bab 3, Tingkatan 4):\n\nHitungkan isipadu gas hidrogen, H₂ pada keadaan bilik yang dihasilkan apabila 1.2 g magnesium bertindak balas dengan asid sulfurik berlebihan. [Ar: Mg = 24; Isipadu molar gas pada keadaan bilik = 24 dm³ mol⁻¹]\nPersamaan: Mg + H₂SO₄ → MgSO₄ + H₂\n\nJawapan / Skema Pemarkahan:\nDiberi:\nJisim Mg = 1.2 g\nAr Mg = 24\nVm = 24 dm³ mol⁻¹\n\nLangkah 1: Mol Mg\nn(Mg) = 1.2 ÷ 24 = 0.05 mol\n\nLangkah 2: Nisbah mol dari persamaan\nMg : H₂ = 1 : 1\nn(H₂) = 0.05 mol\n\nLangkah 3: Isipadu H₂\nV = n × Vm = 0.05 × 24 = 1.2 dm³\n\nJawapan:\nIsipadu gas H₂ = 1.2 dm³",
+    "keywords_bm": [
+      "stoikiometri",
+      "isipadu gas",
+      "magnesium",
+      "nisbah mol"
+    ],
+    "keywords_en": [
+      "stoichiometry",
+      "volume gas",
+      "magnesium",
+      "mole ratio"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [],
+    "has_worked_example": true,
+    "has_diagram": false,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2023,
+    "question_type": "struktur",
+    "marks": 3
+  },
+  {
+    "chunk_id": "spm_2022_bab6_t5_struktur_0003",
+    "source_file": "spm_2022.md",
+    "content_type": "qa_scheme",
+    "chapter": 6,
+    "tingkatan": 5,
+    "topic": "Asid Bes Garam",
+    "subtopic": "Pengiraan pH",
+    "content": "Soalan SPM 2022 (Bab 6, Tingkatan 5):\n\nHitungkan nilai pH asid hidroklorik, HCl yang mempunyai kepekatan 0.01 mol dm⁻³. [HCl → H⁺ + Cl⁻]\n\nJawapan / Skema Pemarkahan:\nDiberi:\n[HCl] = 0.01 mol dm⁻³\nHCl mengion lengkap → [H⁺] = 0.01 mol dm⁻³\n\nFormula:\npH = −log[H⁺]\n\nPengiraan:\npH = −log(0.01)\npH = −log(10⁻²)\npH = 2\n\nJawapan:\npH = 2",
+    "embed_text": "Soalan SPM kimia: Hitungkan nilai pH asid hidroklorik, HCl yang mempunyai kepekatan 0.01 mol dm⁻³. [HCl → H⁺ + Cl⁻]\nTopik: Asid Bes Garam\nSubtopik: Pengiraan pH\nKata kunci: pH, asid hidroklorik, kepekatan ion hidrogen, pH, hydrochloric acid, hydrogen ion concentration\nSoalan SPM 2022 (Bab 6, Tingkatan 5):\n\nHitungkan nilai pH asid hidroklorik, HCl yang mempunyai kepekatan 0.01 mol dm⁻³. [HCl → H⁺ + Cl⁻]\n\nJawapan / Skema Pemarkahan:\nDiberi:\n[HCl] = 0.01 mol dm⁻³\nHCl mengion lengkap → [H⁺] = 0.01 mol dm⁻³\n\nFormula:\npH = −log[H⁺]\n\nPengiraan:\npH = −log(0.01)\npH = −log(10⁻²)\npH = 2\n\nJawapan:\npH = 2",
+    "keywords_bm": [
+      "pH",
+      "asid hidroklorik",
+      "kepekatan ion hidrogen"
+    ],
+    "keywords_en": [
+      "pH",
+      "hydrochloric acid",
+      "hydrogen ion concentration"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [],
+    "has_worked_example": true,
+    "has_diagram": false,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2022,
+    "question_type": "struktur",
+    "marks": 2
+  },
+  {
+    "chunk_id": "spm_2023_bab6_t5_struktur_0004",
+    "source_file": "spm_2023.md",
+    "content_type": "qa_scheme",
+    "chapter": 6,
+    "tingkatan": 5,
+    "topic": "Asid Bes Garam",
+    "subtopic": "Pentitratan",
+    "content": "Soalan SPM 2023 (Bab 6, Tingkatan 5):\n\n25 cm³ larutan natrium hidroksida, NaOH 0.1 mol dm⁻³ dititratkan dengan asid hidroklorik, HCl 0.2 mol dm⁻³.\nHitungkan isipadu HCl yang diperlukan untuk peneutralan lengkap.\nPersamaan: NaOH + HCl → NaCl + H₂O\n\nJawapan / Skema Pemarkahan:\nDiberi:\nV(NaOH) = 25 cm³ = 0.025 dm³\nM(NaOH) = 0.1 mol dm⁻³\nM(HCl) = 0.2 mol dm⁻³\n\nLangkah 1: Mol NaOH\nn(NaOH) = M × V = 0.1 × 0.025 = 0.0025 mol\n\nLangkah 2: Nisbah mol\nNaOH : HCl = 1 : 1\nn(HCl) = 0.0025 mol\n\nLangkah 3: Isipadu HCl\nV = n ÷ M = 0.0025 ÷ 0.2 = 0.0125 dm³ = 12.5 cm³\n\nJawapan:\nIsipadu HCl = 12.5 cm³",
+    "embed_text": "Soalan SPM kimia: 25 cm³ larutan natrium hidroksida, NaOH 0.1 mol dm⁻³ dititratkan dengan asid hidroklorik, HCl 0.2 mol dm⁻³.\nHitungkan isipadu HCl yang diperlukan untuk peneutralan lengkap.\nPersamaan: NaOH + HCl → NaC\nTopik: Asid Bes Garam\nSubtopik: Pentitratan\nKata kunci: pentitratan, peneutralan, NaOH, HCl, nisbah mol, titration, neutralisation, sodium hydroxide, mole ratio\nSoalan SPM 2023 (Bab 6, Tingkatan 5):\n\n25 cm³ larutan natrium hidroksida, NaOH 0.1 mol dm⁻³ dititratkan dengan asid hidroklorik, HCl 0.2 mol dm⁻³.\nHitungkan isipadu HCl yang diperlukan untuk peneutralan lengkap.\nPersamaan: NaOH + HCl → NaCl + H₂O\n\nJawapan / Skema Pemarkahan:\nDiberi:\nV(NaOH) = 25 cm³ = 0.025 dm³\nM(NaOH) = 0.1 mol dm⁻³\nM(HCl) = 0.2 mol dm⁻³\n\nLangkah 1: Mol NaOH\nn(NaOH) = M × V = 0.1 × 0.025 = 0.0025 mol\n\nLangkah 2: Nisbah mol\nNaOH : HCl = 1 : 1\nn(HCl) = 0.0025 mol\n\nLangkah 3: Isipadu HCl\nV = n ÷ M = 0.0025 ÷ 0.2 = 0.0125 dm³ = 12.5 cm³\n\nJawapan:\nIsipadu HCl = 12.5 cm³",
+    "keywords_bm": [
+      "pentitratan",
+      "peneutralan",
+      "NaOH",
+      "HCl",
+      "nisbah mol"
+    ],
+    "keywords_en": [
+      "titration",
+      "neutralisation",
+      "sodium hydroxide",
+      "mole ratio"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [],
+    "has_worked_example": true,
+    "has_diagram": false,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2023,
+    "question_type": "struktur",
+    "marks": 3
+  },
+  {
+    "chunk_id": "spm_2023_bab7_t5_struktur_0005",
+    "source_file": "spm_2023.md",
+    "content_type": "qa_scheme",
+    "chapter": 7,
+    "tingkatan": 5,
+    "topic": "Kadar Tindak Balas",
+    "subtopic": "Pengiraan Kadar",
+    "content": "Soalan SPM 2023 (Bab 7, Tingkatan 5):\n\nRajah menunjukkan graf isipadu gas CO₂ melawan masa untuk tindak balas antara kalsium karbonat dengan asid hidroklorik berlebihan.\n\nJadual data:\nMasa (min) | Isipadu CO₂ (cm³)\n0          | 0\n1          | 40\n2          | 65\n3          | 80\n4          | 88\n5          | 90\n6          | 90\n\n(a) Hitungkan kadar tindak balas purata bagi minit pertama.\n(b) Nyatakan masa tindak balas selesai.\n(c) Mengapakah kadar tindak balas berkurang dengan masa?\n\nJawapan / Skema Pemarkahan:\n(a) Kadar tindak balas purata bagi minit pertama:\nKadar = perubahan isipadu ÷ masa\nKadar = (40 − 0) ÷ 1\nKadar = 40 cm³ min⁻¹\n\n(b) Tindak balas selesai pada minit ke-5\n(isipadu gas tidak berubah selepas minit ke-5)\n\n(c) Kadar tindak balas berkurang dengan masa kerana:\nkepekatan bahan tindak balas (CaCO₃ dan HCl) berkurang.\nFrekuensi perlanggaran berkesan antara zarah berkurang.\nOleh itu, kadar tindak balas menjadi lebih perlahan.",
+    "embed_text": "Soalan SPM kimia: Rajah menunjukkan graf isipadu gas CO₂ melawan masa untuk tindak balas antara kalsium karbonat dengan asid hidroklorik berlebihan.\n\nJadual data:\nMasa (min) | Isipadu CO₂ (cm³)\n0          | 0\n1        \nTopik: Kadar Tindak Balas\nSubtopik: Pengiraan Kadar\nKata kunci: kadar tindak balas, graf isipadu gas, perlanggaran, kepekatan, rate of reaction, gas volume graph, collision frequency, concentration\nSoalan SPM 2023 (Bab 7, Tingkatan 5):\n\nRajah menunjukkan graf isipadu gas CO₂ melawan masa untuk tindak balas antara kalsium karbonat dengan asid hidroklorik berlebihan.\n\nJadual data:\nMasa (min) | Isipadu CO₂ (cm³)\n0          | 0\n1          | 40\n2          | 65\n3          | 80\n4          | 88\n5          | 90\n6          | 90\n\n(a) Hitungkan kadar tindak balas purata bagi minit pertama.\n(b) Nyatakan masa tindak balas selesai.\n(c) Mengapakah kadar tindak balas berkurang dengan masa?\n\nJawapan / Skema Pemarkahan:\n(a) Kadar tindak balas purata bagi minit pertama:\nKadar = perubahan isipadu ÷ masa\nKadar = (40 − 0) ÷ 1\nKadar = 40 cm³ min⁻¹\n\n(b) Tindak balas selesai pada minit ke-5\n(isipadu gas tidak berubah selepas minit ke-5)\n\n(c) Kadar tindak balas berkurang dengan masa kerana:\nkepekatan bahan tindak balas (CaCO₃ dan HCl) berkurang.\nFrekuensi perlanggaran berkesan antara zarah berkurang.\nOleh itu, kadar tindak balas menjadi lebih perlahan.",
+    "keywords_bm": [
+      "kadar tindak balas",
+      "graf isipadu gas",
+      "perlanggaran",
+      "kepekatan"
+    ],
+    "keywords_en": [
+      "rate of reaction",
+      "gas volume graph",
+      "collision frequency",
+      "concentration"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [
+      {
+        "path": "images/graf_kadar_tindak_balas.png",
+        "alt": ""
+      }
+    ],
+    "has_worked_example": true,
+    "has_diagram": true,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2023,
+    "question_type": "struktur",
+    "marks": 5
+  },
+  {
+    "chunk_id": "spm_2021_bab7_t5_esei_0006",
+    "source_file": "spm_2021.md",
+    "content_type": "qa_scheme",
+    "chapter": 7,
+    "tingkatan": 5,
+    "topic": "Kadar Tindak Balas",
+    "subtopic": "Teori Perlanggaran",
+    "content": "Soalan SPM 2021 (Bab 7, Tingkatan 5):\n\nTerangkan kesan suhu terhadap kadar tindak balas berdasarkan teori perlanggaran.\n\nJawapan / Skema Pemarkahan:\nApabila suhu meningkat:\n\n1. Tenaga kinetik zarah meningkat\n2. Zarah bergerak lebih laju\n3. Frekuensi perlanggaran antara zarah meningkat\n4. Lebih banyak zarah mempunyai tenaga sama atau melebihi tenaga pengaktifan\n5. Bilangan perlanggaran berkesan meningkat\n6. Oleh itu, kadar tindak balas meningkat\n\nPeraturan umum: Setiap kenaikan suhu 10°C menggandakan kadar tindak balas.",
+    "embed_text": "Soalan SPM kimia: Terangkan kesan suhu terhadap kadar tindak balas berdasarkan teori perlanggaran.\nTopik: Kadar Tindak Balas\nSubtopik: Teori Perlanggaran\nKata kunci: suhu, tenaga kinetik, perlanggaran berkesan, tenaga pengaktifan, temperature, kinetic energy, effective collision, activation energy\nSoalan SPM 2021 (Bab 7, Tingkatan 5):\n\nTerangkan kesan suhu terhadap kadar tindak balas berdasarkan teori perlanggaran.\n\nJawapan / Skema Pemarkahan:\nApabila suhu meningkat:\n\n1. Tenaga kinetik zarah meningkat\n2. Zarah bergerak lebih laju\n3. Frekuensi perlanggaran antara zarah meningkat\n4. Lebih banyak zarah mempunyai tenaga sama atau melebihi tenaga pengaktifan\n5. Bilangan perlanggaran berkesan meningkat\n6. Oleh itu, kadar tindak balas meningkat\n\nPeraturan umum: Setiap kenaikan suhu 10°C menggandakan kadar tindak balas.",
+    "keywords_bm": [
+      "suhu",
+      "tenaga kinetik",
+      "perlanggaran berkesan",
+      "tenaga pengaktifan"
+    ],
+    "keywords_en": [
+      "temperature",
+      "kinetic energy",
+      "effective collision",
+      "activation energy"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [],
+    "has_worked_example": true,
+    "has_diagram": false,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2021,
+    "question_type": "esei",
+    "marks": 4
+  },
+  {
+    "chunk_id": "spm_2022_bab3_t5_struktur_0007",
+    "source_file": "spm_2022.md",
+    "content_type": "qa_scheme",
+    "chapter": 3,
+    "tingkatan": 5,
+    "topic": "Termokimia",
+    "subtopic": "Kalorimetri dan Entalpi Peneutralan",
+    "content": "Soalan SPM 2022 (Bab 3, Tingkatan 5):\n\n50 cm³ larutan asid hidroklorik, HCl 1.0 mol dm⁻³ dicampurkan dengan 50 cm³ larutan natrium hidroksida, NaOH 1.0 mol dm⁻³. Suhu awal kedua-dua larutan ialah 28.0°C. Suhu akhir campuran ialah 34.5°C.\n\n(a) Hitungkan haba yang dibebaskan dalam tindak balas ini.\n(b) Hitungkan perubahan entalpi peneutralan, ΔH.\n[c = 4.2 J g⁻¹ °C⁻¹; 1 cm³ larutan = 1 g]\n\nJawapan / Skema Pemarkahan:\n(a) Haba yang dibebaskan:\nDiberi:\nm = 100 g (jumlah isipadu = 50 + 50 = 100 cm³)\nc = 4.2 J g⁻¹ °C⁻¹\nΔT = 34.5 − 28.0 = 6.5°C\n\nFormula: Q = mcΔT\nQ = 100 × 4.2 × 6.5\nQ = 2730 J\n\n(b) Perubahan entalpi:\nMol HCl = 0.05 dm³ × 1.0 mol dm⁻³ = 0.05 mol\nMol NaOH = 0.05 mol\nMol H₂O terbentuk = 0.05 mol\n\nΔH = −Q ÷ mol\nΔH = −2730 ÷ 0.05\nΔH = −54600 J mol⁻¹\nΔH = −54.6 kJ mol⁻¹\n\nJawapan:\n(a) Q = 2730 J\n(b) ΔH = −54.6 kJ mol⁻¹ (tanda negatif menunjukkan eksotermik)",
+    "embed_text": "Soalan SPM kimia: 50 cm³ larutan asid hidroklorik, HCl 1.0 mol dm⁻³ dicampurkan dengan 50 cm³ larutan natrium hidroksida, NaOH 1.0 mol dm⁻³. Suhu awal kedua-dua larutan ialah 28.0°C. Suhu akhir campuran ialah 34.5°C.\n\n\nTopik: Termokimia\nSubtopik: Kalorimetri dan Entalpi Peneutralan\nKata kunci: haba peneutralan, kalorimetri, perubahan entalpi, Q=mcΔT, heat of neutralisation, calorimetry, enthalpy change\nSoalan SPM 2022 (Bab 3, Tingkatan 5):\n\n50 cm³ larutan asid hidroklorik, HCl 1.0 mol dm⁻³ dicampurkan dengan 50 cm³ larutan natrium hidroksida, NaOH 1.0 mol dm⁻³. Suhu awal kedua-dua larutan ialah 28.0°C. Suhu akhir campuran ialah 34.5°C.\n\n(a) Hitungkan haba yang dibebaskan dalam tindak balas ini.\n(b) Hitungkan perubahan entalpi peneutralan, ΔH.\n[c = 4.2 J g⁻¹ °C⁻¹; 1 cm³ larutan = 1 g]\n\nJawapan / Skema Pemarkahan:\n(a) Haba yang dibebaskan:\nDiberi:\nm = 100 g (jumlah isipadu = 50 + 50 = 100 cm³)\nc = 4.2 J g⁻¹ °C⁻¹\nΔT = 34.5 − 28.0 = 6.5°C\n\nFormula: Q = mcΔT\nQ = 100 × 4.2 × 6.5\nQ = 2730 J\n\n(b) Perubahan entalpi:\nMol HCl = 0.05 dm³ × 1.0 mol dm⁻³ = 0.05 mol\nMol NaOH = 0.05 mol\nMol H₂O terbentuk = 0.05 mol\n\nΔH = −Q ÷ mol\nΔH = −2730 ÷ 0.05\nΔH = −54600 J mol⁻¹\nΔH = −54.6 kJ mol⁻¹\n\nJawapan:\n(a) Q = 2730 J\n(b) ΔH = −54.6 kJ mol⁻¹ (tanda negatif menunjukkan eksotermik)",
+    "keywords_bm": [
+      "haba peneutralan",
+      "kalorimetri",
+      "perubahan entalpi",
+      "Q=mcΔT"
+    ],
+    "keywords_en": [
+      "heat of neutralisation",
+      "calorimetry",
+      "enthalpy change"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [
+      {
+        "path": "images/bab3_kalorimeter.png",
+        "alt": ""
+      }
+    ],
+    "has_worked_example": true,
+    "has_diagram": true,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2022,
+    "question_type": "struktur",
+    "marks": 5
+  },
+  {
+    "chunk_id": "spm_2021_bab1_t5_struktur_0008",
+    "source_file": "spm_2021.md",
+    "content_type": "qa_scheme",
+    "chapter": 1,
+    "tingkatan": 5,
+    "topic": "Redoks",
+    "subtopic": "Nombor Pengoksidaan",
+    "content": "Soalan SPM 2021 (Bab 1, Tingkatan 5):\n\nTentukan nombor pengoksidaan manganes dalam KMnO₄.\n\nJawapan / Skema Pemarkahan:\nDiberi:\nKMnO₄ adalah sebatian neutral\nK = +1\nO = −2\n\nPengiraan:\nBiarkan nombor pengoksidaan Mn = x\n(+1) + x + 4(−2) = 0\n1 + x − 8 = 0\nx = +7\n\nJawapan:\nNombor pengoksidaan Mn dalam KMnO₄ = +7",
+    "embed_text": "Soalan SPM kimia: Tentukan nombor pengoksidaan manganes dalam KMnO₄.\nTopik: Redoks\nSubtopik: Nombor Pengoksidaan\nKata kunci: nombor pengoksidaan, KMnO4, kalium manganat, oxidation number, potassium permanganate, manganese\nSoalan SPM 2021 (Bab 1, Tingkatan 5):\n\nTentukan nombor pengoksidaan manganes dalam KMnO₄.\n\nJawapan / Skema Pemarkahan:\nDiberi:\nKMnO₄ adalah sebatian neutral\nK = +1\nO = −2\n\nPengiraan:\nBiarkan nombor pengoksidaan Mn = x\n(+1) + x + 4(−2) = 0\n1 + x − 8 = 0\nx = +7\n\nJawapan:\nNombor pengoksidaan Mn dalam KMnO₄ = +7",
+    "keywords_bm": [
+      "nombor pengoksidaan",
+      "KMnO4",
+      "kalium manganat"
+    ],
+    "keywords_en": [
+      "oxidation number",
+      "potassium permanganate",
+      "manganese"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [],
+    "has_worked_example": true,
+    "has_diagram": false,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2021,
+    "question_type": "struktur",
+    "marks": 2
+  },
+  {
+    "chunk_id": "spm_2023_bab1_t5_struktur_0009",
+    "source_file": "spm_2023.md",
+    "content_type": "qa_scheme",
+    "chapter": 1,
+    "tingkatan": 5,
+    "topic": "Redoks",
+    "subtopic": "Agen Pengoksidaan dan Penurunan",
+    "content": "Soalan SPM 2023 (Bab 1, Tingkatan 5):\n\nTindak balas berikut berlaku:\nFe + CuSO₄ → FeSO₄ + Cu\n\n(a) Tentukan spesies yang dioksidakan.\n(b) Tentukan agen penurun dalam tindak balas ini.\n(c) Tulis setengah persamaan untuk pengoksidaan besi.\n\nJawapan / Skema Pemarkahan:\n(a) Spesies yang dioksidakan: Fe (besi)\nNombor pengoksidaan Fe: 0 → +2 (meningkat = dioksidakan)\n\n(b) Agen penurun: Fe (besi)\nAgen penurun menyebabkan bahan lain diturunkan.\nFe menyebabkan Cu²⁺ diturunkan kepada Cu.\n\n(c) Setengah persamaan pengoksidaan besi:\nFe → Fe²⁺ + 2e⁻",
+    "embed_text": "Soalan SPM kimia: Tindak balas berikut berlaku:\nFe + CuSO₄ → FeSO₄ + Cu\n\n(a) Tentukan spesies yang dioksidakan.\n(b) Tentukan agen penurun dalam tindak balas ini.\n(c) Tulis setengah persamaan untuk pengoksidaan besi.\nTopik: Redoks\nSubtopik: Agen Pengoksidaan dan Penurunan\nKata kunci: agen penurun, pengoksidaan, setengah persamaan, Fe, Cu2+, reducing agent, oxidation, half equation, iron, copper\nSoalan SPM 2023 (Bab 1, Tingkatan 5):\n\nTindak balas berikut berlaku:\nFe + CuSO₄ → FeSO₄ + Cu\n\n(a) Tentukan spesies yang dioksidakan.\n(b) Tentukan agen penurun dalam tindak balas ini.\n(c) Tulis setengah persamaan untuk pengoksidaan besi.\n\nJawapan / Skema Pemarkahan:\n(a) Spesies yang dioksidakan: Fe (besi)\nNombor pengoksidaan Fe: 0 → +2 (meningkat = dioksidakan)\n\n(b) Agen penurun: Fe (besi)\nAgen penurun menyebabkan bahan lain diturunkan.\nFe menyebabkan Cu²⁺ diturunkan kepada Cu.\n\n(c) Setengah persamaan pengoksidaan besi:\nFe → Fe²⁺ + 2e⁻",
+    "keywords_bm": [
+      "agen penurun",
+      "pengoksidaan",
+      "setengah persamaan",
+      "Fe",
+      "Cu2+"
+    ],
+    "keywords_en": [
+      "reducing agent",
+      "oxidation",
+      "half equation",
+      "iron",
+      "copper"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [],
+    "has_worked_example": true,
+    "has_diagram": false,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2023,
+    "question_type": "struktur",
+    "marks": 4
+  },
+  {
+    "chunk_id": "spm_2022_bab4_t5_esei_0010",
+    "source_file": "spm_2022.md",
+    "content_type": "qa_scheme",
+    "chapter": 4,
+    "tingkatan": 5,
+    "topic": "Polimer",
+    "subtopic": "Jenis Pempolimeran",
+    "content": "Soalan SPM 2022 (Bab 4, Tingkatan 5):\n\nTerangkan perbezaan antara pempolimeran penambahan dan pempolimeran kondensasi.\n\nJawapan / Skema Pemarkahan:\nPempolimeran Penambahan:\n• Monomer: satu jenis monomer sahaja\n• Syarat: monomer mesti mempunyai ikatan ganda dua (C=C)\n• Hasil sampingan: tiada\n• Jisim molekul polimer = n × jisim monomer\n• Contoh: etena → polietena\n\nPempolimeran Kondensasi:\n• Monomer: dua jenis monomer yang berbeza\n• Syarat: monomer mesti mempunyai dua kumpulan berfungsi\n• Hasil sampingan: molekul kecil dibebaskan (air, HCl)\n• Jisim polimer < n × jisim monomer\n• Contoh: diamin + asid dikarboksilik → nilon",
+    "embed_text": "Soalan SPM kimia: Terangkan perbezaan antara pempolimeran penambahan dan pempolimeran kondensasi.\nTopik: Polimer\nSubtopik: Jenis Pempolimeran\nKata kunci: pempolimeran penambahan, pempolimeran kondensasi, monomer, ikatan ganda dua, addition polymerisation, condensation polymerisation, monomer, double bond\nSoalan SPM 2022 (Bab 4, Tingkatan 5):\n\nTerangkan perbezaan antara pempolimeran penambahan dan pempolimeran kondensasi.\n\nJawapan / Skema Pemarkahan:\nPempolimeran Penambahan:\n• Monomer: satu jenis monomer sahaja\n• Syarat: monomer mesti mempunyai ikatan ganda dua (C=C)\n• Hasil sampingan: tiada\n• Jisim molekul polimer = n × jisim monomer\n• Contoh: etena → polietena\n\nPempolimeran Kondensasi:\n• Monomer: dua jenis monomer yang berbeza\n• Syarat: monomer mesti mempunyai dua kumpulan berfungsi\n• Hasil sampingan: molekul kecil dibebaskan (air, HCl)\n• Jisim polimer < n × jisim monomer\n• Contoh: diamin + asid dikarboksilik → nilon",
+    "keywords_bm": [
+      "pempolimeran penambahan",
+      "pempolimeran kondensasi",
+      "monomer",
+      "ikatan ganda dua"
+    ],
+    "keywords_en": [
+      "addition polymerisation",
+      "condensation polymerisation",
+      "monomer",
+      "double bond"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [
+      {
+        "path": "images/bab4_pempolimeran_penambahan.png",
+        "alt": ""
+      }
+    ],
+    "has_worked_example": true,
+    "has_diagram": true,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2022,
+    "question_type": "esei",
+    "marks": 4
+  },
+  {
+    "chunk_id": "spm_2021_bab3_t5_mcq_0011",
+    "source_file": "spm_2021.md",
+    "content_type": "qa_scheme",
+    "chapter": 3,
+    "tingkatan": 5,
+    "topic": "Termokimia",
+    "subtopic": "Tindak Balas Eksotermik",
+    "content": "Soalan SPM 2021 (Bab 3, Tingkatan 5):\n\nAntara berikut, yang manakah betul tentang tindak balas eksotermik?\n\nA. ΔH bernilai positif\nB. Tenaga diserap dari persekitaran\nC. Suhu persekitaran meningkat\nD. Kandungan tenaga produk lebih tinggi dari reaktan\n\nJawapan / Skema Pemarkahan:\nJawapan: C\n\nPenjelasan:\nTindak balas eksotermik membebaskan tenaga haba ke persekitaran.\nOleh itu, suhu persekitaran (larutan) meningkat.\n\nA — Salah. ΔH eksotermik adalah NEGATIF.\nB — Salah. Tenaga DIBEBASKAN (bukan diserap).\nC — BETUL. Suhu meningkat kerana tenaga dibebaskan.\nD — Salah. Kandungan tenaga produk LEBIH RENDAH dari reaktan.",
+    "embed_text": "Soalan SPM kimia: Antara berikut, yang manakah betul tentang tindak balas eksotermik?\n\nA. ΔH bernilai positif\nB. Tenaga diserap dari persekitaran\nC. Suhu persekitaran meningkat\nD. Kandungan tenaga produk lebih tinggi d\nTopik: Termokimia\nSubtopik: Tindak Balas Eksotermik\nKata kunci: eksotermik, ΔH, suhu, tenaga, exothermic, enthalpy, temperature, energy\nSoalan SPM 2021 (Bab 3, Tingkatan 5):\n\nAntara berikut, yang manakah betul tentang tindak balas eksotermik?\n\nA. ΔH bernilai positif\nB. Tenaga diserap dari persekitaran\nC. Suhu persekitaran meningkat\nD. Kandungan tenaga produk lebih tinggi dari reaktan\n\nJawapan / Skema Pemarkahan:\nJawapan: C\n\nPenjelasan:\nTindak balas eksotermik membebaskan tenaga haba ke persekitaran.\nOleh itu, suhu persekitaran (larutan) meningkat.\n\nA — Salah. ΔH eksotermik adalah NEGATIF.\nB — Salah. Tenaga DIBEBASKAN (bukan diserap).\nC — BETUL. Suhu meningkat kerana tenaga dibebaskan.\nD — Salah. Kandungan tenaga produk LEBIH RENDAH dari reaktan.",
+    "keywords_bm": [
+      "eksotermik",
+      "ΔH",
+      "suhu",
+      "tenaga"
+    ],
+    "keywords_en": [
+      "exothermic",
+      "enthalpy",
+      "temperature",
+      "energy"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [],
+    "has_worked_example": true,
+    "has_diagram": false,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2021,
+    "question_type": "mcq",
+    "marks": 1
+  },
+  {
+    "chunk_id": "spm_2020_bab1_t4_mcq_0012",
+    "source_file": "spm_2020.md",
+    "content_type": "qa_scheme",
+    "chapter": 1,
+    "tingkatan": 4,
+    "topic": "Pengenalan Kimia",
+    "subtopic": "Pengelasan Jirim",
+    "content": "Soalan SPM 2020 (Bab 1, Tingkatan 4):\n\nAntara berikut, yang manakah merupakan koloid?\n\nA. Larutan gula dalam air\nB. Susu\nC. Air suling\nD. Larutan kuprum sulfat\n\nJawapan / Skema Pemarkahan:\nJawapan: B\n\nPenjelasan:\nSusu adalah koloid — zarah tersebar (lemak) bersaiz 1–100 nm dalam medium cecair.\nKoloid kelihatan homogen tetapi zarah tidak larut sepenuhnya.\nA, C, D adalah larutan tulen (homogen, zarah < 1 nm).",
+    "embed_text": "Soalan SPM kimia: Antara berikut, yang manakah merupakan koloid?\n\nA. Larutan gula dalam air\nB. Susu\nC. Air suling\nD. Larutan kuprum sulfat\nTopik: Pengenalan Kimia\nSubtopik: Pengelasan Jirim\nKata kunci: koloid, susu, larutan, campuran, colloid, milk, solution, mixture\nSoalan SPM 2020 (Bab 1, Tingkatan 4):\n\nAntara berikut, yang manakah merupakan koloid?\n\nA. Larutan gula dalam air\nB. Susu\nC. Air suling\nD. Larutan kuprum sulfat\n\nJawapan / Skema Pemarkahan:\nJawapan: B\n\nPenjelasan:\nSusu adalah koloid — zarah tersebar (lemak) bersaiz 1–100 nm dalam medium cecair.\nKoloid kelihatan homogen tetapi zarah tidak larut sepenuhnya.\nA, C, D adalah larutan tulen (homogen, zarah < 1 nm).",
+    "keywords_bm": [
+      "koloid",
+      "susu",
+      "larutan",
+      "campuran"
+    ],
+    "keywords_en": [
+      "colloid",
+      "milk",
+      "solution",
+      "mixture"
+    ],
+    "formulas": [],
+    "equations": [],
+    "diagrams": [],
+    "has_worked_example": true,
+    "has_diagram": false,
+    "has_table": false,
+    "language": "BM",
+    "exam_year": 2020,
+    "question_type": "mcq",
+    "marks": 1
+  }
+]

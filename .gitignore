@@ -1,0 +1,32 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Embedding cache (rebuild locally)
+.embedding_cache.pkl
+
+# Model weights cache (too large)
+.cache/
+~/.cache/spm_embedder/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Firebase credentials - NEVER commit this
+api/firebase_credentials.json
+firebase_credentials.json
+
+# Memory database
+memory/
+*.db
+
+# NOTE: faiss_indexes/ is NOT ignored
+# You must commit built index files for Render deployment
