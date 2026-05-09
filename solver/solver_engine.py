@@ -117,6 +117,45 @@ def solve_moles_from_mass(mass_g: float, formula_str: str) -> str:
     )
 
 
+# =====================================
+# FIX BUG #1 — MULTI-FORMULA MOL
+# =====================================
+def solve_moles_multi(formulas: List[str], masses: List[float]) -> str:
+    """
+    Handle multi-formula "jumlah mol" questions.
+    e.g. "5.6g N2 dan 3.2g O2 — hitungkan jumlah bilangan mol gas"
+    """
+    if not formulas or not masses or len(formulas) != len(masses):
+        raise ValueError("Senarai formula dan jisim tidak sepadan.")
+
+    lines_diberi: List[str] = []
+    lines_calc: List[str] = []
+    lines_jawapan: List[str] = []
+    total_moles = 0.0
+
+    for formula, mass in zip(formulas, masses):
+        M = molar_mass(formula)
+        n = mass / M
+        total_moles += n
+        lines_diberi.append(f"{formula}: m = {fmt_num(mass, 3)} g,  M = {fmt_num(M, 2)} g mol⁻¹")
+        lines_calc.append(f"n({formula}) = {fmt_num(mass, 3)} ÷ {fmt_num(M, 2)} = {fmt_num(n, 4)} mol")
+        lines_jawapan.append(f"n({formula}) = {fmt_num(n, 4)} mol")
+
+    individual = " + ".join(
+        fmt_num(mass / molar_mass(f), 4) for f, mass in zip(formulas, masses)
+    )
+    lines_calc.append(f"Jumlah mol = {individual}")
+    lines_calc.append(f"Jumlah mol = {fmt_num(total_moles, 4)} mol")
+    lines_jawapan.append(f"Jumlah bilangan mol = {fmt_num(total_moles, 4)} mol")
+
+    return spm_format(
+        diberi=lines_diberi,
+        formula=["n = m ÷ M  (dikira untuk setiap komponen)"],
+        pengiraan=lines_calc,
+        jawapan=lines_jawapan,
+    )
+
+
 def solve_moles_from_volume(volume_dm3: float, condition: Optional[str] = None) -> str:
     vm = get_vm(condition)
     n = volume_dm3 / vm
@@ -515,16 +554,54 @@ def solve_thermochemistry_type(temp_initial: float, temp_final: float) -> str:
     )
 
 
+# =====================================
+# FIX BUG #5 — DELTA H ENDOTHERMIC
+# =====================================
 def solve_delta_h_from_calorimetry(mass_g: float, temp_initial: float, temp_final: float, moles: float) -> str:
+    """
+    FIX BUG #5: Correctly handle ENDOTHERMIC reactions (suhu menurun).
+
+    EKSOTERMIK: temp_final > temp_initial
+      → ΔT positif → Q positif → ΔH = -(+Q/mol) = NEGATIF ✓
+
+    ENDOTERMIK: temp_final < temp_initial
+      → ΔT negatif → Q negatif → ΔH = -(-Q/mol) = POSITIF ✓
+    """
     delta_t = temp_final - temp_initial
     Q = mass_g * C_WATER * delta_t
     dH_j = -(Q / moles)
     dH_kj = j_to_kj(dH_j)
+
+    if delta_t > 0:
+        jenis = "Eksotermik"
+        tanda_note = "Suhu meningkat → haba dibebaskan → ΔH negatif"
+    elif delta_t < 0:
+        jenis = "Endotermik"
+        tanda_note = "Suhu menurun → haba diserap → ΔH positif"
+    else:
+        jenis = "Neutral"
+        tanda_note = "Tiada perubahan suhu"
+
     return spm_format(
-        diberi=[f"m = {fmt_num(mass_g, 3)} g", f"c = {C_WATER} J g⁻¹ °C⁻¹", f"Suhu awal = {fmt_num(temp_initial, 2)}°C", f"Suhu akhir = {fmt_num(temp_final, 2)}°C", f"Mol = {fmt_num(moles, 3)} mol"],
-        formula=["Q = mcΔT", "ΔH = − Q ÷ mol"],
-        pengiraan=[f"ΔT = {fmt_num(temp_final, 2)} − {fmt_num(temp_initial, 2)} = {fmt_num(delta_t, 2)}°C", f"Q = {fmt_num(mass_g, 3)} × {C_WATER} × {fmt_num(delta_t, 2)} = {fmt_num(Q, 2)} J", f"ΔH = − ({fmt_num(Q, 2)} ÷ {fmt_num(moles, 3)}) = {fmt_num(dH_j, 2)} J mol⁻¹", f"ΔH = {fmt_num(dH_kj, 2)} kJ mol⁻¹"],
-        jawapan=[f"Perubahan entalpi, ΔH = {fmt_num(dH_kj, 2)} kJ mol⁻¹"],
+        diberi=[
+            f"m = {fmt_num(mass_g, 3)} g",
+            f"c = {C_WATER} J g⁻¹ °C⁻¹",
+            f"Suhu awal = {fmt_num(temp_initial, 2)}°C",
+            f"Suhu akhir = {fmt_num(temp_final, 2)}°C",
+            f"Mol = {fmt_num(moles, 3)} mol",
+        ],
+        formula=["Q = mcΔT", "ΔH = −Q ÷ mol"],
+        pengiraan=[
+            f"ΔT = {fmt_num(temp_final, 2)} − {fmt_num(temp_initial, 2)} = {fmt_num(delta_t, 2)}°C",
+            f"Q = {fmt_num(mass_g, 3)} × {C_WATER} × ({fmt_num(delta_t, 2)}) = {fmt_num(Q, 2)} J",
+            f"ΔH = −({fmt_num(Q, 2)} ÷ {fmt_num(moles, 3)}) = {fmt_num(dH_j, 2)} J mol⁻¹",
+            f"ΔH = {fmt_num(dH_kj, 2)} kJ mol⁻¹",
+            tanda_note,
+        ],
+        jawapan=[
+            f"Perubahan entalpi, ΔH = {fmt_num(dH_kj, 2)} kJ mol⁻¹",
+            f"Jenis tindak balas: {jenis}",
+        ],
     )
 
 
@@ -575,9 +652,14 @@ def solve_oxidation_number(species: str, target_element: str, charge: Optional[i
             lhs_terms.append(f"{count}({ox:+g})" if count != 1 else f"({ox:+g})")
 
     return spm_format(
-        diberi=[f"Spesies = {species}", f"Jumlah nombor pengoksidaan = {total_charge}"] + known_lines,
+        diberi=[f"Spesies = {species}", f"Cas ion = {total_charge}"] + known_lines,
         formula=["Jumlah nombor pengoksidaan = cas spesies"],
-        pengiraan=[f"Biarkan nombor pengoksidaan {target_element} = x", f"{' + '.join(lhs_terms)} = {total_charge}", f"{target_count}x + ({fmt_num(known_sum, 2)}) = {total_charge}" if target_count != 1 else f"x + ({fmt_num(known_sum, 2)}) = {total_charge}", f"x = {fmt_num(x, 2)}"],
+        pengiraan=[
+            f"Biarkan nombor pengoksidaan {target_element} = x",
+            f"{' + '.join(lhs_terms)} = {total_charge}",
+            f"{target_count}x + ({fmt_num(known_sum, 2)}) = {total_charge}" if target_count != 1 else f"x + ({fmt_num(known_sum, 2)}) = {total_charge}",
+            f"x = {fmt_num(x, 2)}",
+        ],
         jawapan=[f"Nombor pengoksidaan {target_element} = {fmt_num(x, 2)}"],
     )
 
@@ -611,6 +693,10 @@ def solve_by_task(task: str, data: Dict[str, Any]) -> str:
         if not formula:
             raise ValueError("Formula diperlukan.")
         return solve_jmr(formula)
+
+    # FIX BUG #1 — multi-formula mol
+    if task == "moles_multi":
+        return solve_moles_multi(data["formulas"], data["masses"])
 
     if task == "moles_from_mass":
         if not formula:
@@ -685,10 +771,7 @@ def solve_by_task(task: str, data: Dict[str, Any]) -> str:
             raise ValueError("Tidak dapat tentukan bahan diberi atau bahan sasaran.")
 
         return solve_stoichiometry_mass_to_mass(
-            equation,
-            given_formula,
-            data["given_mass_g"],
-            target_formula,
+            equation, given_formula, data["given_mass_g"], target_formula,
         )
 
     if task == "empirical_formula":
@@ -702,9 +785,7 @@ def solve_by_task(task: str, data: Dict[str, Any]) -> str:
 
     if task == "concentration_g_dm3":
         return solve_concentration_g_dm3(
-            data["mass_g"],
-            data.get("volume_cm3"),
-            data.get("volume_dm3"),
+            data["mass_g"], data.get("volume_cm3"), data.get("volume_dm3"),
         )
 
     if task == "molarity_from_mass":
@@ -721,7 +802,7 @@ def solve_by_task(task: str, data: Dict[str, Any]) -> str:
         return solve_dilution(data["M1"], data["V2"], data["M2"])
 
     if task == "ph_from_h":
-        h_plus = data.get("h_plus")
+        h_plus = data.get("h_plus") or data.get("h_conc")
         if h_plus is None:
             raise ValueError("Nilai [H⁺] tidak ditemui.")
         return solve_ph_from_h(h_plus)
@@ -739,78 +820,60 @@ def solve_by_task(task: str, data: Dict[str, Any]) -> str:
         return solve_oh_from_poh(data["poh"])
 
     if task == "ph_from_poh":
-        oh = data.get("oh_conc") or data.get("poh")
-        return solve_ph_from_poh(oh)
+        poh = data.get("poh") or data.get("oh_conc")
+        return solve_ph_from_poh(poh)
 
     if task == "titration_find_volume":
         equation = data.get("equation")
         if not equation:
-            equation = f"{data['known_formula']} + {data['unknown_formula']} -> {data['known_formula']}{data['unknown_formula']} + H2O"
-
+            equation = f"{data['known_formula']} + {data['unknown_formula']} -> salt + H2O"
         return solve_titration_find_volume(
-            data["known_molarity"],
-            data["known_volume_cm3"],
-            data["known_formula"],
-            data["unknown_molarity"],
-            data["unknown_formula"],
-            equation,
+            data["known_molarity"], data["known_volume_cm3"],
+            data["known_formula"], data["unknown_molarity"],
+            data["unknown_formula"], equation,
         )
 
     if task == "titration_find_molarity":
         equation = data.get("equation")
         if not equation:
-            equation = f"{data['known_formula']} + {data['unknown_formula']} -> {data['known_formula']}{data['unknown_formula']} + H2O"
-
+            equation = f"{data['known_formula']} + {data['unknown_formula']} -> salt + H2O"
         return solve_titration_find_molarity(
-            data.get("known_mass_g"),
-            data["known_formula"],
-            data.get("known_molarity"),
-            data.get("known_volume_cm3"),
-            data["unknown_formula"],
-            data["unknown_volume_cm3"],
-            equation,
+            data.get("known_mass_g"), data["known_formula"],
+            data.get("known_molarity"), data.get("known_volume_cm3"),
+            data["unknown_formula"], data["unknown_volume_cm3"], equation,
         )
 
     if task == "rate_average":
         return solve_rate_average(
-            data["change"],
-            data["time"],
-            data.get("quantity_unit", "cm³"),
-            data.get("time_unit", "min"),
+            data["change"], data["time"],
+            data.get("quantity_unit", "cm³"), data.get("time_unit", "min"),
         )
 
     if task == "rate_from_points":
         return solve_rate_from_points(
-            data["time1"],
-            data["value1"],
-            data["time2"],
-            data["value2"],
-            data.get("quantity_unit", "cm³"),
-            data.get("time_unit", "min"),
+            data["time1"], data["value1"], data["time2"], data["value2"],
+            data.get("quantity_unit", "cm³"), data.get("time_unit", "min"),
         )
 
     if task == "calorimetry":
         return solve_calorimetry(
-            data["mass_g"],
-            data["temp_initial"],
-            data["temp_final"],
+            data["mass_g"], data["temp_initial"], data["temp_final"],
         )
 
     if task == "enthalpy":
         return solve_enthalpy(data["Q_joule"], data["moles"])
 
     if task == "delta_h_from_calorimetry":
+        # Support both raw and pre-computed temperature keys
+        t_initial = data.get("temp_initial_raw") or data.get("temp_initial")
+        t_final   = data.get("temp_final_raw")   or data.get("temp_final")
         return solve_delta_h_from_calorimetry(
-            data["mass_g"],
-            data["temp_initial"],
-            data["temp_final"],
-            data["moles"],
+            data["mass_g"], t_initial, t_final, data["moles"],
         )
 
     if task == "thermochemistry_type":
         return solve_thermochemistry_type(
-            data["temp_initial"],
-            data["temp_final"],
+            data["temp_initial"], data["temp_final"],
         )
 
     if task == "oxidation_number":
@@ -821,18 +884,13 @@ def solve_by_task(task: str, data: Dict[str, Any]) -> str:
                 species = max(formulas, key=len)
         if not species:
             raise ValueError("Spesies redoks tidak ditemui.")
-
         return solve_oxidation_number(
-            species,
-            data["target_element"],
-            data.get("charge"),
+            species, data["target_element"], data.get("charge"),
         )
 
     if task == "redox_change":
         return solve_redox_change(
-            data["before_ox"],
-            data["after_ox"],
-            data.get("element", "Bahan"),
+            data["before_ox"], data["after_ox"], data.get("element", "Bahan"),
         )
 
     raise ValueError(f"Task '{task}' belum disokong.")

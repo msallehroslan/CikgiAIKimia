@@ -5,6 +5,44 @@ from formula_parser import is_valid_formula
 
 
 # =====================================
+# BM STOPWORDS — KRITIKAL
+# Perkataan BM yang DILARANG parse sebagai simbol kimia
+# FIX BUG #6: "Sebatian" → "Se" (Selenium)
+# FIX BUG #7: kemolaran 0.4 tersalah jadi pOH
+# =====================================
+BM_STOPWORDS = {
+    # Perkataan BM biasa
+    "Sebatian", "sebatian", "Dalam", "dalam", "Ialah", "ialah",
+    "Jika", "jika", "Dan", "dan", "Dengan", "dengan", "Atau", "atau",
+    "Suatu", "suatu", "Satu", "satu", "Untuk", "untuk", "Antara", "antara",
+    "Bagi", "bagi", "Kepada", "kepada", "Daripada", "daripada",
+    "Apabila", "apabila", "Semasa", "semasa", "Selepas", "selepas",
+    "Sebelum", "sebelum", "Oleh", "oleh", "Pada", "pada",
+    "Adalah", "adalah", "Akan", "akan", "Telah", "telah",
+    "Yang", "yang", "Ini", "ini", "Itu", "itu",
+    "Boleh", "boleh", "Perlu", "perlu", "Mesti", "mesti",
+    "Mengandungi", "mengandungi", "Dilarutkan", "dilarutkan",
+    "Dipanaskan", "dipanaskan", "Dicampurkan", "dicampurkan",
+    "Bertindak", "bertindak", "Terhasil", "terhasil",
+    "Meningkat", "meningkat", "Menurun", "menurun",
+    "Berkurang", "berkurang", "Bertambah", "bertambah",
+    # English words yang boleh tersalah parse
+    "Calculate", "Find", "Determine", "What", "Which", "How",
+    "Mass", "Volume", "Molarity", "Formula", "Jawapan", "Diberi", "Pengiraan",
+    "Mol", "Rate", "Change", "Time", "Ar", "RTP", "STP",
+    "Carbon", "Dioxide", "Hydrogen", "Oxygen", "Nitrogen", "Sulfur",
+    "Chlorine", "Water", "Acid", "Base", "Salt", "Gas",
+    "Hitungkan", "Tentukan", "Berapakah", "Apakah", "Nyatakan", "Terangkan",
+    "Jelaskan", "Bandingkan", "Langkah",
+    "Jisim", "Isipadu", "Kepekatan", "Kemolaran",
+    "Tindak", "Balas", "Larutan", "Unsur", "Atom",
+    # Dua huruf yang sering tersalah parse
+    "In", "Of", "At", "To", "By", "As", "An", "Is", "Be",
+    "No", "Do", "Go", "Up", "On", "Or",
+}
+
+
+# =====================================
 # NORMALIZATION
 # =====================================
 def normalize_text(text: str) -> str:
@@ -23,14 +61,70 @@ def normalize_text(text: str) -> str:
     t = t.replace("cm 3", "cm3").replace("dm 3", "dm3")
     t = t.replace("mℓ", "ml")
     t = t.replace("mol dm^-3", "mol dm3").replace("mol dm-3", "mol dm3").replace("mol dm⁻3", "mol dm3")
-    t = t.replace("×10^", "e")
-    t = t.replace("x10^", "e")
-    t = t.replace("× 10^", "e")
-    t = t.replace("x 10^", "e")
-    t = t.replace("×10", "e")
-    t = t.replace("x10", "e")
+    t = t.replace("×10^", "e").replace("x10^", "e")
+    t = t.replace("× 10^", "e").replace("x 10^", "e")
+    t = t.replace("×10", "e").replace("x10", "e")
     t = re.sub(r"\s+", " ", t)
     return t
+
+
+# =====================================
+# ION CHARGE PARSER
+# FIX BUG #3: parse cas ion dari teks soalan
+# e.g. "SO4 2-" → charge=-2, "MnO4 -" → charge=-1
+# =====================================
+def extract_ion_charge(text: str) -> Optional[int]:
+    """
+    Extract ionic charge from question text.
+    Handles: "2-", "2+", "-", "+", "²⁻", "²⁺", "^2-", "^2+"
+    Returns integer charge or None if not found.
+    """
+    t = normalize_text(text)
+
+    # Pattern: number then sign e.g. "2-", "2+" (most common in typed questions)
+    m = re.search(r'(\d+)\s*[-−](?!\d)', t)
+    if m:
+        return -int(m.group(1))
+
+    m = re.search(r'(\d+)\s*[+](?!\d)', t)
+    if m:
+        return +int(m.group(1))
+
+    # Single sign e.g. "MnO4 -" or "NH4 +"
+    if re.search(r'\s[-−]\s*$', t.strip()) or t.strip().endswith(' -'):
+        return -1
+    if re.search(r'\s[+]\s*$', t.strip()) or t.strip().endswith(' +'):
+        return +1
+
+    # Superscript notation already normalised: "^2-" → already handled above
+    return None
+
+
+def extract_species_with_charge(text: str, formulas: List[str]) -> Optional[Dict[str, Any]]:
+    """
+    For oxidation number questions:
+    Extract species formula AND ionic charge from question text.
+    FIX BUG #3: properly detect charge for ions like SO4²⁻, Cr2O7²⁻, MnO4⁻
+    """
+    if not formulas:
+        return None
+
+    q = normalize_text(text)
+    species = formulas[0]
+
+    # Try to find charge explicitly stated in question
+    charge = extract_ion_charge(q)
+
+    # If no charge found via general parse, check species string itself
+    if charge is None:
+        m = re.search(r'([A-Z][A-Za-z0-9()]+)\s*(\d*)\s*([+\-−])', q)
+        if m:
+            sign_char = m.group(3)
+            num_str = m.group(2).strip()
+            num = int(num_str) if num_str else 1
+            charge = num if sign_char == '+' else -num
+
+    return {"species": species, "charge": charge}
 
 
 # =====================================
@@ -41,23 +135,17 @@ def extract_valid_formulas(text: str) -> List[str]:
 
     candidates = re.findall(r"\b[A-Z][A-Za-z0-9()·.]*[A-Za-z0-9)]\b", t)
 
-    bad_words = {
-        "Calculate", "Find", "Determine", "What", "Which", "How",
-        "Mass", "Volume", "Molarity", "Formula", "Jawapan", "Diberi", "Pengiraan",
-        "Mol", "Rate", "Change", "Time", "Ar", "RTP", "STP",
-        "Carbon", "Dioxide", "Hydrogen", "Oxygen", "Nitrogen", "Sulfur",
-        "Chlorine", "Water", "Acid", "Base", "Salt", "Gas",
-        "Hitungkan", "Tentukan", "Berapakah", "Apakah", "Nyatakan", "Terangkan",
-        "Jelaskan", "Bandingkan", "Jawapan", "Diberi", "Pengiraan", "Langkah",
-        "Jisim", "Isipadu", "Kepekatan", "Kemolaran",
-        "Dalam", "Dengan", "Untuk", "Antara", "Tindak", "Balas", "Larutan",
-    }
-
     valid: List[str] = []
     seen = set()
 
     for cand in candidates:
-        if cand in bad_words or cand in seen:
+        # FIX BUG #6: skip BM stopwords
+        if cand in BM_STOPWORDS:
+            continue
+        if cand in seen:
+            continue
+        # Extra guard: skip single-letter uppercase that are BM/EN words
+        if len(cand) == 1 and cand not in {"H", "N", "O", "S", "C", "P", "K", "I", "U", "V", "W", "Y"}:
             continue
         if is_valid_formula(cand):
             valid.append(cand)
@@ -91,10 +179,20 @@ def extract_mole_values(text: str) -> List[float]:
 
 
 def extract_molarity_values(text: str) -> List[float]:
+    """
+    FIX BUG #7: only extract molarity values when EXPLICITLY tied to mol dm-3 unit.
+    Do NOT extract bare numbers as molarity — prevents 0.4 mol/dm3 being read as pOH=0.4
+    """
     vals: List[float] = []
     tl = text.lower()
-    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*(?:mol\s*dm3|m\b)", tl):
+    # Must be explicitly "X mol dm3" or "X M" (with word boundary)
+    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*mol\s*dm[-−]?3", tl):
         vals.append(float(m.group(1)))
+    # Also catch "X mol dm-3" already normalised
+    for m in re.finditer(r"(\d+(?:\.\d+)?)\s*mol\s*dm3", tl):
+        v = float(m.group(1))
+        if v not in vals:
+            vals.append(v)
     return vals
 
 
@@ -104,6 +202,10 @@ def extract_ph(text: str) -> Optional[float]:
 
 
 def extract_poh(text: str) -> Optional[float]:
+    """
+    FIX BUG #7: only extract pOH when 'poh' keyword is explicitly present.
+    Never infer pOH from molarity values.
+    """
     m = re.search(r"\bpoh\s*=?\s*(\d+(?:\.\d+)?)", text.lower())
     return float(m.group(1)) if m else None
 
@@ -115,6 +217,7 @@ def extract_h_plus(text: str) -> Optional[float]:
         r"\[\s*h\+\s*\]\s*=?\s*(\d+(?:\.\d+)?(?:e[+-]?\d+)?)",
         r"hydrogen[^\d]*(\d+(?:\.\d+)?(?:e[+-]?\d+)?)\s*mol\s*dm3",
         r"ion hidrogen[^\d]*(\d+(?:\.\d+)?(?:e[+-]?\d+)?)\s*mol\s*dm3",
+        r"kepekatan\s*h\+[^\d]*(\d+(?:\.\d+)?(?:e[+-]?\d+)?)",
     ]
     for p in patterns:
         m = re.search(p, tl)
@@ -136,6 +239,7 @@ def extract_oh_minus(text: str) -> Optional[float]:
     patterns = [
         r"\[\s*oh-\s*\]\s*=?\s*(\d+(?:\.\d+)?(?:e[+-]?\d+)?)",
         r"ion hidroksida[^\d]*(\d+(?:\.\d+)?(?:e[+-]?\d+)?)\s*mol\s*dm3",
+        r"kepekatan\s*oh-[^\d]*(\d+(?:\.\d+)?(?:e[+-]?\d+)?)",
     ]
     for p in patterns:
         m = re.search(p, tl)
@@ -205,6 +309,11 @@ def extract_isotope_data(text: str) -> Optional[Dict[str, List[float]]]:
     if len(percent_abundances) == len(masses):
         return {"isotope_masses": masses, "abundances": percent_abundances}
 
+    # plain % without brackets e.g. "20% isotop boron-10"
+    plain_pct = [float(x) for x in re.findall(r"(\d+(?:\.\d+)?)\s*%", normalized)]
+    if len(plain_pct) == len(masses):
+        return {"isotope_masses": masses, "abundances": plain_pct}
+
     ratio_match = re.search(r"(?:nisbah[^\d]*)(\d+(?:\s*:\s*\d+)+)", normalized.lower())
     if ratio_match:
         abundances = [float(x.strip()) for x in ratio_match.group(1).split(":")]
@@ -265,17 +374,63 @@ def extract_subatomic_data(text: str) -> Optional[Dict[str, int]]:
 
 
 def extract_empirical_masses(text: str) -> Optional[Dict[str, float]]:
+    """
+    FIX BUG #6: For % composition questions, parse percentages directly.
+    No longer relies on formula extraction (which would get "Se" from "Sebatian").
+    """
     q = normalize_text(text)
-    if not any(k in q.lower() for k in ["empirical", "formula empirik"]):
+    ql = q.lower()
+
+    if not any(k in ql for k in ["empirical", "formula empirik", "empirik", "%", "peratus"]):
         return None
 
+    # Method 1: explicit "El = X g" format
     matches = re.findall(r"([A-Z][a-z]?)\s*=\s*(\d+(?:\.\d+)?)\s*g", q)
     if matches:
         return {el: float(mass) for el, mass in matches}
 
+    # Method 2: "X g El" format
     matches = re.findall(r"(\d+(?:\.\d+)?)\s*g\s*([A-Z][a-z]?)", q)
     if matches:
         return {el: float(mass) for mass, el in matches}
+
+    # Method 3: percentage composition e.g. "40% karbon, 6.7% hidrogen, 53.3% oksigen"
+    # FIX: parse element names in BM/EN then map to symbols
+    element_name_map = {
+        "karbon": "C", "carbon": "C",
+        "hidrogen": "H", "hydrogen": "H",
+        "oksigen": "O", "oxygen": "O",
+        "nitrogen": "N",
+        "sulfur": "S", "belerang": "S",
+        "klorin": "Cl", "chlorine": "Cl",
+        "natrium": "Na", "sodium": "Na",
+        "kalium": "K", "potassium": "K",
+        "kalsium": "Ca", "calcium": "Ca",
+        "besi": "Fe", "iron": "Fe",
+        "tembaga": "Cu", "copper": "Cu",
+        "zink": "Zn", "zinc": "Zn",
+        "fosforus": "P", "phosphorus": "P",
+    }
+
+    pct_pattern = re.findall(r"(\d+(?:\.\d+)?)\s*%\s*([a-z]+)", ql)
+    if pct_pattern:
+        result = {}
+        for pct_str, name in pct_pattern:
+            symbol = element_name_map.get(name.lower())
+            if symbol:
+                result[symbol] = float(pct_str)
+        if result:
+            return result
+
+    # Method 4: percentage with symbol e.g. "75% C, 25% H"
+    pct_sym = re.findall(r"(\d+(?:\.\d+)?)\s*%\s*([A-Z][a-z]?)\b", q)
+    if pct_sym:
+        result = {}
+        for pct_str, sym in pct_sym:
+            if sym not in BM_STOPWORDS and is_valid_formula(sym):
+                result[sym] = float(pct_str)
+        if result:
+            return result
 
     return None
 
@@ -284,6 +439,9 @@ def extract_oxidation_target(text: str, formulas: List[str]) -> Optional[Dict[st
     q = text.lower()
     if not any(k in q for k in ["nombor pengoksidaan", "oxidation number", "pengoksidaan"]):
         return None
+
+    # FIX BUG #3: extract charge from question text, not just from species string
+    charge = extract_ion_charge(normalize_text(text))
 
     species = formulas[0] if formulas else None
     if not species:
@@ -313,20 +471,21 @@ def extract_oxidation_target(text: str, formulas: List[str]) -> Optional[Dict[st
         if not target and parsed_symbols:
             target = parsed_symbols[0]
 
-    charge = None
-    m = re.search(r"([+-]\d+|\d+[+-]|[+-])\s*$", species)
-    if m:
-        token = m.group(1)
-        if token in ["+", "-"]:
-            charge = 1 if token == "+" else -1
-        elif token.endswith("+"):
-            charge = int(token[:-1])
-        elif token.endswith("-"):
-            charge = -int(token[:-1])
-        elif token.startswith("+"):
-            charge = int(token[1:])
-        elif token.startswith("-"):
-            charge = -int(token[1:])
+    # If charge still None, try to parse from species string itself
+    if charge is None:
+        m = re.search(r"([+-]\d*|\d*[+-])\s*$", species)
+        if m:
+            token = m.group(1).strip()
+            if token in ["+", "-"]:
+                charge = 1 if token == "+" else -1
+            elif token.endswith("+"):
+                charge = int(token[:-1]) if token[:-1] else 1
+            elif token.endswith("-"):
+                charge = -(int(token[:-1]) if token[:-1] else 1)
+            elif token.startswith("+"):
+                charge = int(token[1:]) if token[1:] else 1
+            elif token.startswith("-"):
+                charge = -(int(token[1:]) if token[1:] else 1)
 
     return {"species": species, "target_element": target, "charge": charge}
 
@@ -350,6 +509,41 @@ def extract_redox_change(text: str) -> Optional[Dict[str, Any]]:
 
 
 # =====================================
+# THERMOCHEMISTRY DETECTOR
+# FIX BUG #4: detect thermochemistry BEFORE volume/mol chain
+# =====================================
+def is_thermochemistry_question(ql: str) -> bool:
+    """
+    Returns True if question is about heat/enthalpy calculation.
+    FIX BUG #4: prevents routing to gas volume solver for thermo questions.
+    """
+    thermo_keywords = [
+        "entalpi", "enthalpy", "delta h", "δh",
+        "haba", "heat", "kalorimetri", "calorimetry",
+        "suhu meningkat", "suhu menurun", "suhu naik", "suhu turun",
+        "temperature rise", "temperature drop",
+        "exothermic", "endothermic", "eksotermik", "endotermik",
+        "pemelarutan", "pembakaran", "peneutralan",
+        "dissolution", "combustion", "neutralization", "neutralisation",
+    ]
+    return any(k in ql for k in thermo_keywords)
+
+
+def is_titration_question(ql: str) -> bool:
+    """
+    Returns True if question is about acid-base titration.
+    FIX BUG #4: prevents routing to gas volume solver for titration questions.
+    """
+    titration_keywords = [
+        "titrat", "pentitratan", "dititrat",
+        "neutralis", "meneutralkan", "neutralkan",
+        "neutralise", "neutralize", "neutralization", "neutralisation",
+        "titration", "titrate",
+    ]
+    return any(k in ql for k in titration_keywords)
+
+
+# =====================================
 # STRUCTURED EXTRACTOR
 # =====================================
 def structured_extract(question: str) -> Optional[Dict[str, Any]]:
@@ -363,7 +557,7 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     moles = extract_mole_values(q)
     molarities = extract_molarity_values(q)
     ph = extract_ph(q)
-    poh = extract_poh(q)
+    poh = extract_poh(q)         # FIX BUG #7: now only extracts if "poh" keyword present
     h_plus = extract_h_plus(q)
     oh_minus = extract_oh_minus(q)
     temperatures = extract_temperatures(q)
@@ -376,58 +570,113 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     mole_words = any(k in ql for k in ["mol", "mole", "bilangan mol"])
 
     # =====================================
-    # PRIORITY 0: pH / pOH / TITRATION
-    # Must be checked BEFORE mol/volume chain
+    # PRIORITY 0 — THERMOCHEMISTRY
+    # FIX BUG #4: MUST be checked BEFORE volume/mol chain
+    # "50cm3 larutan" was triggering gas solver instead of enthalpy
     # =====================================
+    if is_thermochemistry_question(ql):
+        # Need moles for delta_h calculation
+        # If no explicit moles, try to calculate from formula + molarity + volume
+        calc_moles = moles[0] if moles else None
+        if calc_moles is None and molarities and volumes_cm3:
+            calc_moles = molarities[0] * (volumes_cm3[0] / 1000.0)
 
-    # pOH detection
+        if len(temperatures) >= 2:
+            # Total mass = sum of solution volumes (assume 1g/cm3)
+            total_mass = masses[0] if masses else (
+                sum(volumes_cm3) if volumes_cm3 else None
+            )
+            if total_mass and calc_moles:
+                return {
+                    "task": "delta_h_from_calorimetry",
+                    "mass_g": total_mass,
+                    "temp_initial": min(temperatures[0], temperatures[1]),
+                    "temp_final": max(temperatures[0], temperatures[1])
+                    if temperatures[1] > temperatures[0]
+                    else temperatures[1],   # preserve direction for endothermic
+                    "temp_initial_raw": temperatures[0],
+                    "temp_final_raw": temperatures[1],
+                    "moles": calc_moles,
+                }
+            if total_mass:
+                return {
+                    "task": "calorimetry",
+                    "mass_g": total_mass,
+                    "temp_initial": temperatures[0],
+                    "temp_final": temperatures[1],
+                }
+
+    # =====================================
+    # PRIORITY 1 — TITRATION
+    # FIX BUG #4: MUST be checked BEFORE volume/mol chain
+    # "20cm3 HCl meneutralkan 40cm3 NaOH" was routing to gas solver
+    # =====================================
+    if is_titration_question(ql):
+        if len(molarities) >= 2 and len(volumes_cm3) >= 1:
+            data: Dict[str, Any] = {
+                "task": "titration_find_volume",
+                "known_molarity": molarities[0],
+                "known_volume_cm3": volumes_cm3[0],
+                "known_formula": formulas[0] if formulas else "asid",
+                "unknown_molarity": molarities[1],
+                "unknown_formula": formulas[1] if len(formulas) > 1 else "bes",
+            }
+            if equation:
+                data["equation"] = equation
+            return data
+
+        if len(molarities) == 1 and len(volumes_cm3) >= 2:
+            data = {
+                "task": "titration_find_molarity",
+                "known_molarity": molarities[0],
+                "known_volume_cm3": volumes_cm3[0],
+                "known_formula": formulas[0] if formulas else "diketahui",
+                "unknown_formula": formulas[1] if len(formulas) > 1 else "tidak diketahui",
+                "unknown_volume_cm3": volumes_cm3[1],
+            }
+            if equation:
+                data["equation"] = equation
+            return data
+
+        if masses and len(volumes_cm3) >= 1 and len(formulas) >= 2:
+            data = {
+                "task": "titration_find_molarity",
+                "known_mass_g": masses[0],
+                "known_formula": formulas[0],
+                "unknown_formula": formulas[1],
+                "unknown_volume_cm3": volumes_cm3[-1],
+            }
+            if equation:
+                data["equation"] = equation
+            return data
+
+    # =====================================
+    # PRIORITY 2 — pH / pOH
+    # =====================================
     if "poh" in ql:
         if oh_minus:
-            return {"task": "poh_from_oh", "oh_conc": oh_minus[0]}
+            return {"task": "poh_from_oh", "oh_minus": oh_minus}
         if moles:
-            return {"task": "poh_from_oh", "oh_conc": moles[0]}
+            return {"task": "poh_from_oh", "oh_minus": moles[0]}
 
-    # pH from OH- (alkali)
     if "ph" in ql and any(k in ql for k in ["oh-", "oh -", "hidroksida", "hydroxide"]):
         if oh_minus:
-            return {"task": "ph_from_poh", "oh_conc": oh_minus[0]}
+            return {"task": "ph_from_poh", "oh_conc": oh_minus}
         if moles:
             return {"task": "ph_from_poh", "oh_conc": moles[0]}
 
-    # pH from H+ (acid)  
-    if "ph" in ql and any(k in ql for k in ["h+", "hcl", "hno3", "h2so4", "asid", "acid"]):
+    if "ph" in ql and any(k in ql for k in ["h+", "hcl", "hno3", "h2so4", "asid", "acid", "kepekatan h"]):
         if h_plus:
-            return {"task": "ph_from_h", "h_conc": h_plus[0]}
+            return {"task": "ph_from_h", "h_plus": h_plus}
         if moles:
-            return {"task": "ph_from_h", "h_conc": moles[0]}
-
-    # Titration
-    if any(k in ql for k in ["titrat", "pentitratan", "dititrat", "neutralis"]):
-        if len(molarities) >= 2 and volumes_cm3:
-            return {
-                "task": "titration_find_volume",
-                "known_molarity": molarities[0],
-                "known_volume_cm3": volumes_cm3[0],
-                "known_formula": formulas[0] if formulas else "NaOH",
-                "unknown_molarity": molarities[1],
-                "unknown_formula": formulas[1] if len(formulas) > 1 else "HCl",
-            }
-        if molarities and volumes_cm3:
-            return {
-                "task": "titration_find_volume",
-                "known_molarity": molarities[0],
-                "known_volume_cm3": volumes_cm3[0],
-                "known_formula": formulas[0] if formulas else "NaOH",
-                "unknown_molarity": molarities[-1],
-                "unknown_formula": formulas[-1] if formulas else "HCl",
-            }
+            return {"task": "ph_from_h", "h_plus": moles[0]}
 
     # =====================================
-    # PRIORITY: SPECIFIC / HIGH-CONFIDENCE TASKS
+    # PRIORITY 3 — SPECIFIC HIGH-CONFIDENCE TASKS
     # =====================================
 
     # JMR
-    if any(k in ql for k in ["jmr", "jisim molekul relatif", "relative molecular mass"]):
+    if any(k in ql for k in ["jmr", "jisim molekul relatif", "relative molecular mass", "jisim molar"]):
         if formulas:
             return {"task": "jmr", "formula": formulas[0], "formulas": formulas}
 
@@ -441,23 +690,26 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     if isotope_data and any(k in ql for k in ["ar", "jisim atom relatif", "relative atomic mass", "isotop", "isotope"]):
         return {"task": "ar_from_abundance", **isotope_data}
 
-    # Empirical formula
+    # Empirical formula — FIX BUG #6: uses new % parser, not formula extractor
     empirical = extract_empirical_masses(q)
     if empirical:
         return {"task": "empirical_formula", "element_masses": empirical}
 
-    # Oxidation number
+    # Oxidation number — FIX BUG #3: charge now correctly parsed
     ox = extract_oxidation_target(q, formulas)
     if ox:
         return {"task": "oxidation_number", **ox}
 
-    # Redox increase / decrease
+    # Redox change
     redox_change = extract_redox_change(q)
     if redox_change and any(k in ql for k in ["oxidation", "reduction", "pengoksidaan", "penurunan"]):
         return {"task": "redox_change", **redox_change}
 
     # Stoichiometry mass-to-mass
-    if equation and len(formulas) >= 2 and masses and any(k in ql for k in ["stoichiometry", "stoikiometri", "formed", "terbentuk", "hasilkan", "produce", "reacts", "reaction"]):
+    if equation and len(formulas) >= 2 and masses and any(k in ql for k in [
+        "stoichiometry", "stoikiometri", "formed", "terbentuk", "hasilkan",
+        "produce", "reacts", "reaction", "mendapan", "precipitate", "pemendapan"
+    ]):
         return {
             "task": "stoichiometry_mass_to_mass",
             "equation": equation,
@@ -466,57 +718,7 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
             "target_formula": formulas[1],
         }
 
-    # Titration
-    if any(k in ql for k in ["titrate", "titration", "pentitratan", "neutralise", "neutralization", "neutralisation"]) and len(formulas) >= 2:
-        if len(molarities) >= 2 and volumes_cm3:
-            data = {
-                "task": "titration_find_volume",
-                "known_molarity": molarities[0],
-                "known_volume_cm3": volumes_cm3[0],
-                "known_formula": formulas[0],
-                "unknown_molarity": molarities[1],
-                "unknown_formula": formulas[1],
-            }
-            if equation:
-                data["equation"] = equation
-            return data
-
-        if masses and volumes_cm3:
-            data = {
-                "task": "titration_find_molarity",
-                "known_mass_g": masses[0],
-                "known_formula": formulas[0],
-                "unknown_formula": formulas[1],
-                "unknown_volume_cm3": volumes_cm3[-1],
-            }
-            if equation:
-                data["equation"] = equation
-            return data
-
-        if len(molarities) >= 1 and len(volumes_cm3) >= 2:
-            data = {
-                "task": "titration_find_molarity",
-                "known_molarity": molarities[0],
-                "known_volume_cm3": volumes_cm3[0],
-                "known_formula": formulas[0],
-                "unknown_formula": formulas[1],
-                "unknown_volume_cm3": volumes_cm3[1],
-            }
-            if equation:
-                data["equation"] = equation
-            return data
-
-    # Delta H from calorimetry
-    if any(k in ql for k in ["enthalpy", "entalpi", "delta h", "Δh"]) and len(temperatures) >= 2 and masses and moles:
-        return {
-            "task": "delta_h_from_calorimetry",
-            "mass_g": masses[0],
-            "temp_initial": temperatures[0],
-            "temp_final": temperatures[1],
-            "moles": moles[0],
-        }
-
-    # Calorimetry only
+    # Calorimetry only (no moles available)
     if any(k in ql for k in ["haba", "heat", "calorimetry", "kalorimetri", "q =", "diserap", "dibebaskan"]) and len(temperatures) >= 2 and masses:
         return {
             "task": "calorimetry",
@@ -525,14 +727,14 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
             "temp_final": temperatures[1],
         }
 
-    # Enthalpy only
-    if any(k in ql for k in ["enthalpy", "entalpi", "delta h", "Δh"]) and moles:
+    # Enthalpy only (Q and moles given directly)
+    if any(k in ql for k in ["enthalpy", "entalpi", "delta h", "δh"]) and moles:
         m_q = re.search(r"(\d+(?:\.\d+)?)\s*(j|kj)\b", ql)
         if m_q:
             qv = float(m_q.group(1)) * (1000 if m_q.group(2) == "kj" else 1)
             return {"task": "enthalpy", "Q_joule": qv, "moles": moles[0]}
 
-    # Thermochemistry type
+    # Thermochemistry type (eksotermik/endotermik)
     if any(k in ql for k in ["eksotermik", "endotermik", "exothermic", "endothermic", "jenis tindak balas"]) and len(temperatures) >= 2:
         return {
             "task": "thermochemistry_type",
@@ -542,22 +744,11 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
 
     # Rate from two points
     if any(k in ql for k in ["kadar", "rate"]) and len(times) >= 2:
-        numeric_pairs = re.findall(
-            r"(\d+(?:\.\d+)?)\s*(?:min|minute|minutes|s|sec|second|seconds)\D+(\d+(?:\.\d+)?)\s*(?:cm3|ml|dm3|g|mol)",
-            ql
-        )
-        if len(numeric_pairs) >= 2:
-            t1, v1 = map(float, numeric_pairs[0])
-            t2, v2 = map(float, numeric_pairs[1])
-            return {"task": "rate_from_points", "time1": t1, "value1": v1, "time2": t2, "value2": v2}
-
         if len(volumes_cm3) >= 2 and len(times) >= 2:
             return {
                 "task": "rate_from_points",
-                "time1": times[0],
-                "value1": volumes_cm3[0],
-                "time2": times[1],
-                "value2": volumes_cm3[1],
+                "time1": times[0], "value1": volumes_cm3[0],
+                "time2": times[1], "value2": volumes_cm3[1],
             }
 
     # Rate average
@@ -568,7 +759,7 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
         if len(values) >= 1:
             return {"task": "rate_average", "change": values[0], "time": times[0]}
 
-    # pH / pOH
+    # pH / pOH (lower priority fallback)
     if poh is not None and ("ph" in ql or "nilai ph" in ql):
         return {"task": "ph_from_poh", "poh": poh}
 
@@ -584,7 +775,7 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     if poh is not None and any(k in ql for k in ["[oh", "oh-", "ion hidroksida"]):
         return {"task": "oh_from_poh", "poh": poh}
 
-    # Concentration g dm3
+    # Concentration g/dm3
     if any(k in ql for k in ["g dm3", "g dm-3", "kepekatan"]) and masses and (volumes_cm3 or volumes_dm3):
         data: Dict[str, Any] = {"task": "concentration_g_dm3", "mass_g": masses[0]}
         if volumes_cm3:
@@ -609,17 +800,18 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
 
     # Dilution
     if any(k in ql for k in ["dilution", "pencairan", "m1v1", "m2v2"]) and len(molarities) >= 2:
-        v_candidates = [float(x) for x in re.findall(r"(?:v2|akhir|final volume|isipadu akhir)\s*=?\s*(\d+(?:\.\d+)?)", ql)]
+        v_candidates = [float(x) for x in re.findall(
+            r"(?:v2|akhir|final volume|isipadu akhir)\s*=?\s*(\d+(?:\.\d+)?)", ql
+        )]
         V2 = v_candidates[0] if v_candidates else (
-            volumes_cm3[0] if volumes_cm3 else (
-                volumes_dm3[0] if volumes_dm3 else None
-            )
+            volumes_cm3[0] if volumes_cm3 else (volumes_dm3[0] if volumes_dm3 else None)
         )
         if V2 is not None:
             return {"task": "dilution", "M1": molarities[0], "M2": molarities[1], "V2": V2}
 
     # =====================================
-    # MOL / GAS CHAIN
+    # MOL / GAS CHAIN — LOWEST PRIORITY
+    # FIX BUG #4: only reached if NOT thermo/titration question
     # =====================================
     if particle_words and volume_words and (volumes_dm3 or volumes_cm3):
         data: Dict[str, Any] = {"task": "particles_from_volume", "condition": condition}
@@ -650,7 +842,7 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
             data["volume_cm3"] = volumes_cm3[0]
         return data
 
-    if any(k in ql for k in ["volume", "isi padu"]) and masses and formulas:
+    if any(k in ql for k in ["volume", "isi padu", "isipadu"]) and masses and formulas:
         return {
             "task": "volume_from_mass",
             "mass_g": masses[0],
@@ -658,6 +850,16 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
             "formulas": formulas,
             "condition": condition,
         }
+
+    # FIX BUG #1: multi-formula "jumlah mol" question
+    # e.g. "5.6g N2 dan 3.2g O2 — jumlah mol?"
+    if mole_words and len(formulas) >= 2 and len(masses) >= 2:
+        if any(k in ql for k in ["jumlah", "total", "keseluruhan", "combined", "semua", "campuran"]):
+            return {
+                "task": "moles_multi",
+                "formulas": formulas,
+                "masses": masses,
+            }
 
     if mole_words and masses and formulas:
         return {
