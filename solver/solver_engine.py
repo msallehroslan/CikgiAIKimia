@@ -852,7 +852,15 @@ def solve_by_task(task: str, data: Dict[str, Any]) -> str:
         return solve_oh_from_poh(data["poh"])
 
     if task == "ph_from_poh":
-        poh = data.get("poh") or data.get("oh_conc")
+        # Support direct pOH value OR [OH-] concentration (two-step)
+        poh = data.get("poh")
+        if poh is None:
+            oh_conc = data.get("oh_conc") or data.get("oh_minus")
+            if oh_conc is not None:
+                import math as _math
+                poh = -_math.log10(oh_conc)
+        if poh is None:
+            raise ValueError("Nilai pOH atau [OH-] diperlukan.")
         return solve_ph_from_poh(poh)
 
     if task == "titration_find_volume":

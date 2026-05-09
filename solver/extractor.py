@@ -578,12 +578,22 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     # "50cm3 larutan" was triggering gas solver instead of enthalpy
     # =====================================
     if is_thermochemistry_question(ql):
-        # FIX: molarity x volume FIRST — never use bare molarity as moles
+        # FIX: calc_moles priority order:
+        # 1. molarity x volume (larutan: HCl + NaOH)
+        # 2. jisim bahan terlarut / Mr (pemelarutan: NaOH dalam air)
+        # 3. mol eksplisit dalam soalan
         calc_moles = None
         if molarities and volumes_cm3:
             calc_moles = molarities[0] * (min(volumes_cm3) / 1000.0)
         elif molarities and volumes_dm3:
             calc_moles = molarities[0] * min(volumes_dm3)
+        elif masses and formulas and not molarities:
+            # pemelarutan: 2g NaOH → mol = 2/40 = 0.05
+            try:
+                from formula_parser import molar_mass as _mm
+                calc_moles = masses[0] / _mm(formulas[0])
+            except Exception:
+                calc_moles = None
         elif moles:
             calc_moles = moles[0]
 
@@ -683,6 +693,10 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     if "ph" in ql and any(k in ql for k in ["oh-", "oh -", "hidroksida", "hydroxide"]):
         if oh_minus:
             return {"task": "ph_from_poh", "oh_conc": oh_minus}
+        # FIX Q8: kepekatan OH- given as molarity value, not oh_minus
+        # e.g. 'kepekatan OH- ialah 0.001 mol dm-3' → molarities=[0.001]
+        if molarities:
+            return {"task": "ph_from_poh", "oh_conc": molarities[0]}
         if moles:
             return {"task": "ph_from_poh", "oh_conc": moles[0]}
 
@@ -727,17 +741,29 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
         return {"task": "redox_change", **redox_change}
 
     # Stoichiometry mass-to-mass
-    if equation and len(formulas) >= 2 and masses and any(k in ql for k in [
+    # FIX Q6/Q10: pick given_formula from LHS of equation, not formulas[0]
+    # e.g. 'CaCO3->CaO+CO2' with mass 5g → given=CaCO3 (LHS), target=CO2 (RHS)
+    if equation and masses and any(k in ql for k in [
         "stoichiometry", "stoikiometri", "formed", "terbentuk", "hasilkan",
-        "produce", "reacts", "reaction", "mendapan", "precipitate", "pemendapan"
+        "produce", "reacts", "reaction", "mendapan", "precipitate", "pemendapan",
+        "terhasil", "dihasilkan", "bertindak balas"
     ]):
-        return {
-            "task": "stoichiometry_mass_to_mass",
-            "equation": equation,
-            "given_formula": formulas[0],
-            "given_mass_g": masses[0],
-            "target_formula": formulas[1],
-        }
+        # Parse reactants (LHS) and products (RHS) from equation
+        eq_parts = equation.split('->')
+        lhs_formulas = re.findall(r'[A-Z][A-Za-z0-9()]*', eq_parts[0]) if len(eq_parts) >= 1 else []
+        rhs_formulas = re.findall(r'[A-Z][A-Za-z0-9()]*', eq_parts[1]) if len(eq_parts) >= 2 else []
+        # given = first formula from LHS that appears in question formulas
+        given_f = next((f for f in lhs_formulas if f in formulas), formulas[0] if formulas else None)
+        # target = first formula from RHS that appears in question OR first RHS formula
+        target_f = next((f for f in rhs_formulas if f in formulas), rhs_formulas[0] if rhs_formulas else None)
+        if given_f and target_f and given_f != target_f:
+            return {
+                "task": "stoichiometry_mass_to_mass",
+                "equation": equation,
+                "given_formula": given_f,
+                "given_mass_g": masses[0],
+                "target_formula": target_f,
+            }
 
     # Calorimetry only (no moles available)
     if any(k in ql for k in ["haba", "heat", "calorimetry", "kalorimetri", "q =", "diserap", "dibebaskan"]) and len(temperatures) >= 2 and masses:
