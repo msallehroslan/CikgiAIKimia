@@ -576,10 +576,15 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     # =====================================
     if is_thermochemistry_question(ql):
         # Need moles for delta_h calculation
-        # If no explicit moles, try to calculate from formula + molarity + volume
-        calc_moles = moles[0] if moles else None
-        if calc_moles is None and molarities and volumes_cm3:
-            calc_moles = molarities[0] * (volumes_cm3[0] / 1000.0)
+        # FIX: molarity x volume FIRST — never use bare molarity as moles
+        # e.g. '50cm3 HCl 1.0 mol dm-3' -> mol = 1.0 x 0.05 = 0.05, NOT 1.0
+        calc_moles = None
+        if molarities and volumes_cm3:
+            calc_moles = molarities[0] * (min(volumes_cm3) / 1000.0)
+        elif molarities and volumes_dm3:
+            calc_moles = molarities[0] * min(volumes_dm3)
+        elif moles:
+            calc_moles = moles[0]
 
         if len(temperatures) >= 2:
             # Total mass = sum of solution volumes (assume 1g/cm3)
