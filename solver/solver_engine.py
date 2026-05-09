@@ -371,6 +371,33 @@ def solve_molarity_from_mass(mass_g: float, formula_str: str, volume_dm3: float)
     )
 
 
+def solve_mass_from_molarity(molarity: float, volume_dm3: float, formula_str: str) -> str:
+    """
+    FIX BUG #10: "Berapakah jisim X untuk membuat Y dm3 larutan Z mol dm-3?"
+    Reverse of molarity_from_mass.
+    """
+    M = molar_mass(formula_str)
+    n = molarity * volume_dm3
+    mass_g = n * M
+    volume_cm3 = dm3_to_cm3(volume_dm3)
+    return spm_format(
+        diberi=[
+            f"Kemolaran = {fmt_num(molarity, 3)} mol dm\u207b\u00b3",
+            f"Isipadu = {fmt_num(volume_cm3, 2)} cm\u00b3 = {fmt_num(volume_dm3, 3)} dm\u00b3",
+            f"Formula = {formula_str}",
+            f"Jisim molar = {fmt_num(M, 2)} g mol\u207b\u00b9",
+        ],
+        formula=["n = M \u00d7 V", "m = n \u00d7 Mr"],
+        pengiraan=[
+            f"n = {fmt_num(molarity, 3)} \u00d7 {fmt_num(volume_dm3, 3)}",
+            f"n = {fmt_num(n, 3)} mol",
+            f"m = {fmt_num(n, 3)} \u00d7 {fmt_num(M, 2)}",
+            f"m = {fmt_num(mass_g, 3)} g",
+        ],
+        jawapan=[f"Jisim {formula_str} = {fmt_num(mass_g, 3)} g"],
+    )
+
+
 def solve_dilution(M1: float, V2: float, M2: float) -> str:
     V1 = (M2 * V2) / M1
     return spm_format(
@@ -797,6 +824,11 @@ def solve_by_task(task: str, data: Dict[str, Any]) -> str:
         if not formula:
             raise ValueError("Formula diperlukan.")
         return solve_molarity_from_mass(data["mass_g"], formula, volume_dm3)
+
+    if task == "mass_from_molarity":
+        return solve_mass_from_molarity(
+            data["molarity"], data["volume_dm3"], data["formula"]
+        )
 
     if task == "dilution":
         return solve_dilution(data["M1"], data["V2"], data["M2"])

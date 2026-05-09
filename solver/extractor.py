@@ -76,27 +76,30 @@ def normalize_text(text: str) -> str:
 def extract_ion_charge(text: str) -> Optional[int]:
     """
     Extract ionic charge from question text.
-    Handles: "2-", "2+", "-", "+", "²⁻", "²⁺", "^2-", "^2+"
-    Returns integer charge or None if not found.
+    FIX BUG #7b: Must only match charge that appears AFTER whitespace
+    or at end of string — NOT numbers inside formula like NO3, SO4, Cr2O7.
+
+    Valid:   "SO4 2-"  "MnO4 -"  "NO3 -"  "Cr2O7 2-"  "NH4 +"
+    Invalid: "NO3" (the 3 is part of formula, not charge)
     """
     t = normalize_text(text)
 
-    # Pattern: number then sign e.g. "2-", "2+" (most common in typed questions)
-    m = re.search(r'(\d+)\s*[-−](?!\d)', t)
+    # Pattern: whitespace then number then sign at end of token
+    # e.g. "SO4 2-"  "Cr2O7 2-"
+    m = re.search(r'\s(\d+)\s*[-−](?!\d)', t)
     if m:
         return -int(m.group(1))
 
-    m = re.search(r'(\d+)\s*[+](?!\d)', t)
+    m = re.search(r'\s(\d+)\s*[+](?!\d)', t)
     if m:
         return +int(m.group(1))
 
-    # Single sign e.g. "MnO4 -" or "NH4 +"
-    if re.search(r'\s[-−]\s*$', t.strip()) or t.strip().endswith(' -'):
+    # Single sign after whitespace: "MnO4 -"  "NO3 -"  "NH4 +"
+    if re.search(r'\s[-−]\s*$', t.strip()):
         return -1
-    if re.search(r'\s[+]\s*$', t.strip()) or t.strip().endswith(' +'):
+    if re.search(r'\s[+]\s*$', t.strip()):
         return +1
 
-    # Superscript notation already normalised: "^2-" → already handled above
     return None
 
 
@@ -575,9 +578,7 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     # "50cm3 larutan" was triggering gas solver instead of enthalpy
     # =====================================
     if is_thermochemistry_question(ql):
-        # Need moles for delta_h calculation
         # FIX: molarity x volume FIRST — never use bare molarity as moles
-        # e.g. '50cm3 HCl 1.0 mol dm-3' -> mol = 1.0 x 0.05 = 0.05, NOT 1.0
         calc_moles = None
         if molarities and volumes_cm3:
             calc_moles = molarities[0] * (min(volumes_cm3) / 1000.0)
@@ -586,21 +587,36 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
         elif moles:
             calc_moles = moles[0]
 
+        # FIX BUG #9: jisim LARUTAN bukan jisim bahan terlarut
+        if volumes_cm3:
+            total_mass = sum(volumes_cm3)
+        elif masses and not molarities:
+            total_mass = masses[0]
+        else:
+            total_mass = None
+
+        # FIX BUG (Q3): detect "suhu meningkat X°C" = single delta_T
+        # e.g. "suhu meningkat 13.5°C" — tiada suhu awal/akhir eksplisit
+        delta_t_match = re.search(
+            r'suhu\s+(?:meningkat|naik|turun|menurun)\s+(\d+(?:\.\d+)?)',
+            ql
+        )
+        if delta_t_match and len(temperatures) < 2:
+            delta_t_val = float(delta_t_match.group(1))
+            if 'turun' in ql or 'menurun' in ql:
+                delta_t_val = -delta_t_val
+            # Use dummy base temp 25°C; solver only needs delta_t
+            t_initial = 25.0
+            t_final = 25.0 + delta_t_val
+            temperatures = [t_initial, t_final]
+
         if len(temperatures) >= 2:
-            # Total mass = sum of solution volumes (assume 1g/cm3)
-            total_mass = masses[0] if masses else (
-                sum(volumes_cm3) if volumes_cm3 else None
-            )
             if total_mass and calc_moles:
                 return {
                     "task": "delta_h_from_calorimetry",
                     "mass_g": total_mass,
-                    "temp_initial": min(temperatures[0], temperatures[1]),
-                    "temp_final": max(temperatures[0], temperatures[1])
-                    if temperatures[1] > temperatures[0]
-                    else temperatures[1],   # preserve direction for endothermic
-                    "temp_initial_raw": temperatures[0],
-                    "temp_final_raw": temperatures[1],
+                    "temp_initial": temperatures[0],
+                    "temp_final": temperatures[1],
                     "moles": calc_moles,
                 }
             if total_mass:
@@ -788,6 +804,20 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
         if volumes_dm3:
             data["volume_dm3"] = volumes_dm3[0]
         return data
+
+    # FIX BUG #10: mass_from_molarity — "jisim yang diperlukan untuk membuat larutan"
+    # e.g. "berapa jisim NaOH untuk buat 500cm3 larutan 0.5 mol dm-3?"
+    if any(k in ql for k in ["diperlukan", "required", "needed", "membuat larutan",
+                               "prepare", "sediakan", "buat larutan"]):
+        if molarities and (volumes_cm3 or volumes_dm3) and formulas:
+            vol_dm3 = (min(volumes_cm3) / 1000.0) if volumes_cm3 else min(volumes_dm3)
+            return {
+                "task": "mass_from_molarity",
+                "molarity": molarities[0],
+                "volume_dm3": vol_dm3,
+                "formula": formulas[0],
+                "formulas": formulas,
+            }
 
     # Molarity from mass
     if any(k in ql for k in ["kemolaran", "molarity"]) and masses and formulas and (volumes_dm3 or volumes_cm3):
