@@ -276,29 +276,42 @@ def extract_condition(text: str) -> Optional[str]:
 
 
 def extract_equation(text: str) -> Optional[str]:
+    """
+    FIX: Extract clean chemical equation from question text.
+    Problem: "5g CaCO3 dipanaskan. CaCO3 -> CaO + CO2"
+             old parser grabbed entire sentence before -> as LHS
+    Fix: Find -> position, trim LHS to last sentence/clause boundary
+    """
     t = normalize_text(text)
-    t = t.replace(".", " ")
 
-    m = re.search(r"([A-Za-z0-9()\[\]+.\s]+(?:->)[A-Za-z0-9()\[\]+.\s]+)", t)
-    if m:
-        eq = re.sub(r"\s*->\s*", " -> ", m.group(1).strip())
-        eq = re.sub(r"\s+", " ", eq).strip()
+    arrow_pos = t.find('->')
+    if arrow_pos == -1:
+        return None
 
-        stop_words = [
-            " calculate ", " find ", " determine ", " when ", " what ", " volume ",
-            " mass ", " moles ", " particles ", " of ", " in ", " at ", " used ",
-            " formed ", " reacts ", " reaction "
-        ]
-        eq_lower = f" {eq.lower()} "
-        cut_pos = len(eq)
-        for w in stop_words:
-            pos = eq_lower.find(w)
-            if pos != -1:
-                cut_pos = min(cut_pos, pos)
-        eq = eq[:cut_pos].strip()
+    # ── LEFT SIDE: trim at sentence/clause boundaries ──
+    left = t[:arrow_pos]
+    # Stop at sentence end, comma, or BM/EN clause starters
+    for sep in ['. ', ', ', ' jika ', ' apabila ', ' dan ', ' atau ',
+                ' if ', ' when ', ' where ', ' with ', ' using ']:
+        pos = left.rfind(sep)
+        if pos != -1:
+            left = left[pos + len(sep):]
 
-        if "->" in eq:
-            return eq
+    # Remove leading non-formula characters
+    left = re.sub(r'^[^A-Z0-9]+', '', left.strip())
+
+    # ── RIGHT SIDE: trim at sentence/clause boundaries ──
+    right = t[arrow_pos + 2:]
+    for sep in ['. ', ', jika ', ', apabila ', ', dan ', ', if ', ', when ']:
+        pos = right.find(sep)
+        if pos != -1:
+            right = right[:pos]
+
+    eq = (left.strip() + " -> " + right.strip()).strip()
+    eq = re.sub(r'\s+', ' ', eq)
+
+    if '->' in eq and re.search(r'[A-Z]', eq):
+        return eq
     return None
 
 
