@@ -254,6 +254,38 @@ def solve_volume_from_mass_multistep(mass_g: float, formula_str: str, condition:
     )
 
 
+def solve_stoichiometry_mass_to_volume(equation: str, given_formula: str, given_mass_g: float, target_formula: str, condition: Optional[str] = None) -> str:
+    """
+    FIX Q4/Q5: Stoichiometry where answer is GAS VOLUME not mass.
+    e.g. "14g N2 + 3H2 -> 2NH3, isipadu NH3 pada RTP?"
+    e.g. "5g CaCO3 -> CaO + CO2, isipadu CO2 pada RTP?"
+    """
+    given_M = molar_mass(given_formula)
+    given_n = given_mass_g / given_M
+    ratio = get_ratio(equation, given_formula, target_formula)
+    target_n = given_n * ratio
+    vm = get_vm(condition)
+    target_vol = target_n * vm
+    label = condition_label(condition, vm)
+    return spm_format(
+        diberi=[
+            f"Persamaan = {equation}",
+            f"Jisim {given_formula} = {fmt_num(given_mass_g, 3)} g",
+            f"Keadaan = {label}",
+            f"Vm = {vm} dm\u00b3 mol\u207b\u00b9",
+        ],
+        formula=["n = m \u00f7 M", "Nisbah mol daripada persamaan kimia", "V = n \u00d7 Vm"],
+        pengiraan=[
+            f"M({given_formula}) = {fmt_num(given_M, 2)} g mol\u207b\u00b9",
+            f"n({given_formula}) = {fmt_num(given_mass_g, 3)} \u00f7 {fmt_num(given_M, 2)} = {fmt_num(given_n, 3)} mol",
+            f"Nisbah {given_formula} : {target_formula} = {fmt_num(ratio, 3)}",
+            f"n({target_formula}) = {fmt_num(given_n, 3)} \u00d7 {fmt_num(ratio, 3)} = {fmt_num(target_n, 3)} mol",
+            f"V({target_formula}) = {fmt_num(target_n, 3)} \u00d7 {vm} = {fmt_num(target_vol, 3)} dm\u00b3",
+        ],
+        jawapan=[f"Isipadu {target_formula} = {fmt_num(target_vol, 3)} dm\u00b3"],
+    )
+
+
 def solve_stoichiometry_mass_to_mass(equation: str, given_formula: str, given_mass_g: float, target_formula: str) -> str:
     given_M = molar_mass(given_formula)
     given_n = given_mass_g / given_M
@@ -776,6 +808,17 @@ def solve_by_task(task: str, data: Dict[str, Any]) -> str:
         if not formula:
             raise ValueError("Formula diperlukan.")
         return solve_volume_from_mass_multistep(data["mass_g"], formula, data.get("condition"))
+
+    if task == "stoichiometry_mass_to_volume":
+        equation = data["equation"]
+        given_formula = data.get("given_formula")
+        target_formula = data.get("target_formula")
+        if not given_formula or not target_formula:
+            raise ValueError("Formula diberi dan sasaran diperlukan.")
+        return solve_stoichiometry_mass_to_volume(
+            equation, given_formula, data["given_mass_g"],
+            target_formula, data.get("condition"),
+        )
 
     if task == "stoichiometry_mass_to_mass":
         equation = data["equation"]
