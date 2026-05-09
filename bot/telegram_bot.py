@@ -63,7 +63,6 @@ _user_timestamps: Dict[int, list] = {}
 def is_rate_limited(user_id: int) -> bool:
     now = time.time()
     ts = _user_timestamps.setdefault(user_id, [])
-    # Remove old timestamps (> 60s ago)
     _user_timestamps[user_id] = [t for t in ts if now - t < 60]
     if len(_user_timestamps[user_id]) >= RATE_LIMIT_RPM:
         return True
@@ -121,10 +120,6 @@ async def call_quiz_api(topic: str, question_type: str = "mcq", n: int = 3) -> d
 # ---------------------------------------------------------------------------
 
 def format_answer_telegram(answer: str, answer_type: str) -> str:
-    """
-    Format API answer for Telegram Markdown.
-    Escapes special characters and adds emoji headers.
-    """
     TYPE_EMOJI = {
         "calculation": "🧮",
         "theory": "📚",
@@ -132,10 +127,8 @@ def format_answer_telegram(answer: str, answer_type: str) -> str:
     }
     emoji = TYPE_EMOJI.get(answer_type, "💬")
 
-    # Escape Markdown special chars in content (not in headers)
     lines = []
     for line in answer.split('\n'):
-        # Preserve SPM structure headers
         if line.strip().startswith(('Diberi:', 'Formula:', 'Pengiraan:', 'Jawapan:')):
             lines.append(f"*{line.strip()}*")
         else:
@@ -151,7 +144,6 @@ def format_sources(sources: list) -> str:
     source_lines = []
     for s in sources[:3]:
         topic = s.get('topic', '')
-        score = s.get('score', 0)
         ch = s.get('chapter', '')
         if topic:
             source_lines.append(f"• {topic}" + (f" (Bab {ch})" if ch else ""))
@@ -165,10 +157,6 @@ def format_sources(sources: list) -> str:
 # ---------------------------------------------------------------------------
 
 async def ocr_image(file_path: str) -> str:
-    """
-    Extract text from an image using pytesseract.
-    Supports BM + EN (Malay uses similar Latin charset).
-    """
     try:
         import pytesseract
         from PIL import Image
@@ -223,14 +211,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/start — Halaman utama\n"
         "/help — Arahan ini\n"
         "/quiz [topik] — Jana soalan kuiz\n"
-        "/solve [soalan] — Pengiraan sahaja (tanpa penjelasan)\n"
+        "/solve [soalan] — Pengiraan sahaja\n"
         "/chapter [nombor] — Tetapkan penapis bab\n"
         "/clear — Kosongkan tetapan sesi\n\n"
-        "*Cara guna:*\n"
-        "Taip soalan anda secara terus. Saya akan:\n"
-        "• Selesaikan pengiraan dengan formula Python\n"
-        "• Jawab teori dari nota SPM\n"
-        "• Jana kuiz berdasarkan topik pilihan\n\n"
         "*Format jawapan pengiraan:*\n"
         "Diberi: → Formula: → Pengiraan: → Jawapan:"
     )
@@ -266,7 +249,6 @@ async def cmd_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg += f"💡 _{q['penjelasan']}_\n"
             msg += "\n"
 
-        # Telegram message limit = 4096 chars
         if len(msg) > 4000:
             msg = msg[:4000] + "\n\n_[Soalan dipendekkan]_"
 
@@ -306,7 +288,6 @@ async def cmd_solve(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_chapter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Set chapter filter for this user session."""
     if context.args:
         try:
             ch = int(context.args[0])
@@ -386,7 +367,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         formatted += format_sources(sources)
         formatted += f"\n\n_⏱ {processing_ms:.0f}ms_"
 
-        # Split if too long for Telegram
         if len(formatted) > 4096:
             chunks = [formatted[i:i+4000] for i in range(0, len(formatted), 4000)]
             for chunk in chunks:
@@ -406,7 +386,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------------------------
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle image messages — OCR to extract text, then answer as Q."""
     user_id = update.effective_user.id
 
     if is_rate_limited(user_id):
@@ -416,8 +395,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(ChatAction.TYPING)
     await update.message.reply_text("📷 Memproses gambar... Sila tunggu.")
 
-    # Download the photo
-    photo = update.message.photo[-1]  # largest resolution
+    photo = update.message.photo[-1]
     photo_file = await photo.get_file()
 
     import tempfile
@@ -426,8 +404,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tmp_path = tmp.name
 
     extracted = await ocr_image(tmp_path)
-
-    # Clean up
     Path(tmp_path).unlink(missing_ok=True)
 
     caption = update.message.caption or ""
@@ -440,9 +416,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await update.message.reply_text(f"🔍 Teks dijumpai dalam gambar:\n_{question[:200]}_", parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(
+        f"🔍 Teks dijumpai dalam gambar:\n_{question[:200]}_",
+        parse_mode=ParseMode.MARKDOWN,
+    )
 
-    # Answer the extracted question
     try:
         result = await call_chat_api(
             question=question[:500],
@@ -456,12 +434,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
-# MAIN
+# MAIN — POLLING MODE (no webhook needed)
 # ---------------------------------------------------------------------------
 
 def main():
     if not TELEGRAM_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN not set in environment")
+
+    logger.info(f"Connecting to API: {API_BASE_URL}")
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -480,8 +460,13 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-    logger.info("Cikgu AI Kimia Telegram Bot started.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("Cikgu AI Kimia Bot started (polling mode)")
+
+    # Drop pending updates so old messages dont flood
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":
