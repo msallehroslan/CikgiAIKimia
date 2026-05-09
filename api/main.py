@@ -8,6 +8,7 @@ Production-ready REST API with:
   - /api/retrieve    — raw retrieval (for debugging)
   - /api/health      — health check
   - /api/index/stats — FAISS index statistics
+  - /webhook         — Telegram webhook endpoint
 
 Architecture:
   Question → Router → Calculation Solver (deterministic)
@@ -26,7 +27,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -43,21 +44,239 @@ logger = logging.getLogger("cikgu_ai_kimia")
 # ---------------------------------------------------------------------------
 
 INDEX_DIR = os.environ.get("FAISS_INDEX_DIR", str(BASE_DIR / "faiss_indexes"))
-LLM_API_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY", "")
-LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o-mini")
 SCORE_THRESHOLD = float(os.environ.get("RETRIEVAL_THRESHOLD", "0.30"))
 MAX_CONTEXT_CHARS = int(os.environ.get("MAX_CONTEXT_CHARS", "3000"))
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+API_BASE_URL = os.environ.get("API_BASE_URL", "")
 
 # ---------------------------------------------------------------------------
-# APP LIFESPAN — load models once at startup
+# APP STATE
 # ---------------------------------------------------------------------------
 
 _app_state: Dict[str, Any] = {}
 
+# ---------------------------------------------------------------------------
+# TELEGRAM BOT SETUP
+# ---------------------------------------------------------------------------
+
+async def setup_telegram(app_instance):
+    """Initialize telegram bot and set webhook."""
+    if not TELEGRAM_TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN not set — bot disabled")
+        return
+
+    try:
+        from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+        from telegram.ext import (
+            Application,
+            CommandHandler,
+            MessageHandler,
+            CallbackQueryHandler,
+            ContextTypes,
+            filters,
+        )
+        from telegram.constants import ChatAction, ParseMode
+        import httpx
+
+        # ── Helpers ────────────────────────────────────────────────────────
+
+        def format_answer(answer: str, answer_type: str) -> str:
+            emoji = {"calculation": "🧮", "theory": "📚", "fallback": "ℹ️"}.get(answer_type, "💬")
+            lines = []
+            for line in answer.split('\n'):
+                if line.strip().startswith(('Diberi:', 'Formula:', 'Pengiraan:', 'Jawapan:')):
+                    lines.append(f"*{line.strip()}*")
+                else:
+                    lines.append(line)
+            return f"{emoji} *Jawapan Cikgu AI Kimia*\n\n" + '\n'.join(lines)
+
+        async def call_api(question: str, session_id: str) -> dict:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    f"http://localhost:{os.environ.get('PORT', 10000)}/api/chat",
+                    json={"question": question, "session_id": session_id, "top_k": 5},
+                )
+                resp.raise_for_status()
+                return resp.json()
+
+        # ── Command Handlers ───────────────────────────────────────────────
+
+        async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            keyboard = [
+                [
+                    InlineKeyboardButton("📚 Teori", callback_data="mode_theory"),
+                    InlineKeyboardButton("🧮 Pengiraan", callback_data="mode_calc"),
+                ],
+                [
+                    InlineKeyboardButton("📝 Kuiz", callback_data="mode_quiz"),
+                    InlineKeyboardButton("❓ Bantuan", callback_data="mode_help"),
+                ],
+            ]
+            await update.message.reply_text(
+                "👋 *Selamat datang ke Cikgu AI Kimia!*\n\n"
+                "Saya boleh membantu anda dalam:\n"
+                "• Pengiraan kimia SPM (langkah demi langkah)\n"
+                "• Teori dan konsep kimia\n"
+                "• Soalan latihan dan kuiz\n\n"
+                "Taip soalan anda dalam Bahasa Malaysia atau English.\n\n"
+                "Contoh:\n"
+                "_Hitungkan bilangan mol dalam 4.7 g K₂O_\n"
+                "_Terangkan perbezaan eksotermik dan endotermik_",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            await update.message.reply_text(
+                "📚 *Cikgu AI Kimia — Arahan*\n\n"
+                "/start — Halaman utama\n"
+                "/help — Arahan ini\n"
+                "/quiz [topik] — Jana soalan kuiz\n"
+                "/solve [soalan] — Pengiraan sahaja\n"
+                "/clear — Kosongkan tetapan sesi\n\n"
+                "*Format jawapan pengiraan:*\n"
+                "Diberi: → Formula: → Pengiraan: → Jawapan:",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        async def cmd_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            topic = " ".join(context.args) if context.args else "Konsep Mol"
+            await update.message.chat.send_action(ChatAction.TYPING)
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(
+                        f"http://localhost:{os.environ.get('PORT', 10000)}/api/quiz",
+                        json={"topic": topic, "num_questions": 3, "language": "BM"},
+                    )
+                    result = resp.json()
+                questions = result.get("quiz", {}).get("questions", [])
+                if not questions:
+                    await update.message.reply_text(f"Tiada soalan untuk topik: {topic}")
+                    return
+                msg = f"📝 *Kuiz: {topic}*\n\n"
+                for i, q in enumerate(questions, 1):
+                    msg += f"*{i}. {q.get('soalan', '')}*\n"
+                    for opt in q.get('pilihan', []):
+                        msg += f"   {opt}\n"
+                    msg += f"✅ {q.get('jawapan', '')}\n"
+                    if q.get('penjelasan'):
+                        msg += f"💡 _{q['penjelasan']}_\n"
+                    msg += "\n"
+                if len(msg) > 4000:
+                    msg = msg[:4000] + "\n_[dipendekkan]_"
+                await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+            except Exception as e:
+                await update.message.reply_text(f"Ralat: {e}")
+
+        async def cmd_solve(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            question = " ".join(context.args) if context.args else ""
+            if not question:
+                await update.message.reply_text("Contoh: /solve Hitung mol 2g H2O")
+                return
+            await update.message.chat.send_action(ChatAction.TYPING)
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(
+                        f"http://localhost:{os.environ.get('PORT', 10000)}/api/solve",
+                        json={"question": question},
+                    )
+                    result = resp.json()
+                if result.get("success"):
+                    await update.message.reply_text(
+                        f"🧮 *Pengiraan*\n\n{result['answer']}",
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+                else:
+                    await update.message.reply_text(f"❌ {result.get('error', 'Gagal.')}")
+            except Exception as e:
+                await update.message.reply_text(f"Ralat: {e}")
+
+        async def cmd_clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            context.user_data.clear()
+            await update.message.reply_text("✅ Tetapan sesi dikosongkan.")
+
+        async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            query = update.callback_query
+            await query.answer()
+            data = query.data
+            if data == "mode_help":
+                await cmd_help(update, context)
+            elif data == "mode_quiz":
+                await query.edit_message_text("Taip: /quiz [topik]\nContoh: /quiz Konsep Mol")
+            elif data == "mode_theory":
+                await query.edit_message_text(
+                    "📚 *Mod Teori*\nTaip soalan teori anda.",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+            elif data == "mode_calc":
+                await query.edit_message_text(
+                    "🧮 *Mod Pengiraan*\nTaip soalan pengiraan anda.",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+
+        async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            question = update.message.text.strip()
+            if not question or len(question) < 3:
+                return
+            user_id = update.effective_user.id
+            await update.message.chat.send_action(ChatAction.TYPING)
+            try:
+                result = await call_api(question, session_id=f"tg_{user_id}")
+                answer = result.get("answer", "Maaf, tiada jawapan.")
+                answer_type = result.get("answer_type", "fallback")
+                sources = result.get("sources", [])
+                ms = result.get("processing_time_ms", 0)
+
+                formatted = format_answer(answer, answer_type)
+
+                # Add sources
+                src_lines = [f"• {s.get('topic','')}" for s in sources[:2] if s.get('topic')]
+                if src_lines:
+                    formatted += "\n\n📖 _Sumber: " + ", ".join(src_lines) + "_"
+                formatted += f"\n\n_⏱ {ms:.0f}ms_"
+
+                if len(formatted) > 4096:
+                    for chunk in [formatted[i:i+4000] for i in range(0, len(formatted), 4000)]:
+                        await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+                else:
+                    await update.message.reply_text(formatted, parse_mode=ParseMode.MARKDOWN)
+
+            except Exception as e:
+                logger.error(f"Bot message error: {e}")
+                await update.message.reply_text("Maaf, ralat berlaku. Sila cuba lagi.")
+
+        # ── Build Application ──────────────────────────────────────────────
+
+        telegram_app = Application.builder().token(TELEGRAM_TOKEN).build()
+        telegram_app.add_handler(CommandHandler("start", cmd_start))
+        telegram_app.add_handler(CommandHandler("help", cmd_help))
+        telegram_app.add_handler(CommandHandler("quiz", cmd_quiz))
+        telegram_app.add_handler(CommandHandler("solve", cmd_solve))
+        telegram_app.add_handler(CommandHandler("clear", cmd_clear))
+        telegram_app.add_handler(CallbackQueryHandler(button_handler))
+        telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+        await telegram_app.initialize()
+        _app_state["telegram_app"] = telegram_app
+
+        # ── Set Webhook ────────────────────────────────────────────────────
+        webhook_url = f"{API_BASE_URL}/webhook"
+        await telegram_app.bot.set_webhook(
+            url=webhook_url,
+            drop_pending_updates=True,
+        )
+        logger.info(f"Telegram webhook set: {webhook_url}")
+
+    except Exception as e:
+        logger.error(f"Telegram setup failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# APP LIFESPAN
+# ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load RAG components at startup, free at shutdown."""
     logger.info("Starting Cikgu AI Kimia...")
 
     try:
@@ -76,10 +295,16 @@ async def lifespan(app: FastAPI):
         logger.info("All components loaded successfully.")
     except Exception as e:
         logger.error(f"Failed to load components: {e}")
-        # Allow app to start but flag degraded mode
         _app_state["error"] = str(e)
 
+    # Setup Telegram webhook
+    await setup_telegram(app)
+
     yield
+
+    # Shutdown telegram
+    if "telegram_app" in _app_state:
+        await _app_state["telegram_app"].shutdown()
 
     logger.info("Shutting down Cikgu AI Kimia...")
     _app_state.clear()
@@ -98,7 +323,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tighten for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -110,12 +335,10 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 
 class ChatRequest(BaseModel):
-    question: str = Field(..., min_length=3, max_length=1000,
-                          example="Hitungkan bilangan mol dalam 4.7 g K2O")
-    language: str = Field(default="BM", example="BM",
-                          description="Response language: BM or EN")
-    chapter_filter: Optional[int] = Field(default=None, example=3)
-    tingkatan_filter: Optional[int] = Field(default=None, example=4)
+    question: str = Field(..., min_length=3, max_length=1000)
+    language: str = Field(default="BM")
+    chapter_filter: Optional[int] = None
+    tingkatan_filter: Optional[int] = None
     top_k: int = Field(default=5, ge=1, le=10)
     session_id: Optional[str] = None
 
@@ -123,7 +346,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     question: str
     answer: str
-    answer_type: str             # "calculation" | "theory" | "fallback"
+    answer_type: str
     sources: List[Dict[str, Any]]
     retrieval_scores: List[float]
     solver_used: bool
@@ -163,7 +386,7 @@ class QuizRequest(BaseModel):
     topic: str = Field(..., example="Konsep Mol")
     chapter: Optional[int] = None
     tingkatan: Optional[int] = None
-    question_type: str = Field(default="mcq", example="mcq")
+    question_type: str = Field(default="mcq")
     num_questions: int = Field(default=5, ge=1, le=20)
     language: str = Field(default="BM")
 
@@ -175,18 +398,13 @@ class HealthResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# LLM CALL (supports OpenAI and Anthropic)
+# LLM CALL
 # ---------------------------------------------------------------------------
 
 async def call_llm(prompt: str, max_tokens: int = 800) -> str:
-    """
-    Call Groq LLM — fast, free, multilingual.
-    Falls back to OpenAI/Anthropic if GROQ_API_KEY not set.
-    """
     groq_key = os.environ.get("GROQ_API_KEY", "")
     groq_model = os.environ.get("GROQ_MODEL", "llama-3.1-70b-versatile")
 
-    # Primary: Groq
     if groq_key:
         try:
             from groq import AsyncGroq
@@ -202,23 +420,7 @@ async def call_llm(prompt: str, max_tokens: int = 800) -> str:
             logger.error(f"Groq error: {e}")
             return f"[Ralat Groq: {e}]"
 
-    # Fallback: OpenAI
-    openai_key = os.environ.get("OPENAI_API_KEY", "")
-    if openai_key:
-        try:
-            from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=openai_key)
-            resp = await client.chat.completions.create(
-                model=os.environ.get("LLM_MODEL", "gpt-4o-mini"),
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-                temperature=0.1,
-            )
-            return resp.choices[0].message.content
-        except Exception as e:
-            return f"[Ralat OpenAI: {e}]"
-
-    return "[LLM tidak dikonfigurasi. Tambah GROQ_API_KEY dalam .env]"
+    return "[LLM tidak dikonfigurasi. Tambah GROQ_API_KEY]"
 
 
 # ---------------------------------------------------------------------------
@@ -233,45 +435,38 @@ async def answer_question(req: ChatRequest) -> ChatResponse:
     retriever = _app_state.get("retriever")
 
     if not all([route_fn, solve_fn, retriever]):
-        raise HTTPException(503, detail="Components not loaded. Check server logs.")
+        raise HTTPException(503, detail="Components not loaded.")
 
-    # ── Step 1: Route the question ─────────────────────────────────────────
     task, data = route_fn(req.question)
     if task == "jmr" and data is None:
         import re
         formulas = re.findall(r"[A-Z][A-Za-z0-9()]+", req.question)
-        bad = {"Hitungkan","Tentukan","Berapakah","Jisim","Molar","Formula"}
+        bad = {"Hitungkan", "Tentukan", "Berapakah", "Jisim", "Molar", "Formula"}
         formulas = [f for f in formulas if f not in bad]
         if formulas:
             data = {"task": "jmr", "formula": formulas[0], "formulas": formulas}
+
     solver_used = False
     context_found = False
     sources = []
     retrieval_scores = []
 
-    # ── Step 2A: Calculation path ──────────────────────────────────────────
+    # ── Calculation path ───────────────────────────────────────────────────
     if task != "unknown" and data is not None:
         try:
             solver_answer = solve_fn(task, data)
             solver_used = True
 
-            # Optionally augment with retrieved explanation
             rag_results = retriever.retrieve_for_calculation(req.question, k=2)
-
             if rag_results and retriever.is_sufficient_context(rag_results, min_score=0.35):
                 context_found = True
                 sources = [
-                    {
-                        "chunk_id": r.chunk_id,
-                        "topic": r.topic,
-                        "content_type": r.content_type,
-                        "score": round(r.score, 4),
-                    }
+                    {"chunk_id": r.chunk_id, "topic": r.topic,
+                     "content_type": r.content_type, "score": round(r.score, 4)}
                     for r in rag_results
                 ]
                 retrieval_scores = [r.score for r in rag_results]
 
-                # Build explanation prompt
                 explanation_prompt = f"""Kamu adalah Cikgu AI Kimia, tutor kimia SPM yang pakar.
 
 Pengiraan berikut telah diselesaikan:
@@ -286,21 +481,18 @@ Format jawapan:
 Langkah 1: [nama langkah]
 → [terangkan APA yang dilakukan dan MENGAPA]
 
-Langkah 2: [nama langkah]  
+Langkah 2: [nama langkah]
 → [terangkan APA yang dilakukan dan MENGAPA]
 
-[teruskan untuk semua langkah]
-
 **Konsep Penting:**
-→ [terangkan konsep utama yang digunakan dalam 2-3 ayat]
+→ [terangkan konsep utama dalam 2-3 ayat]
 
 **Tip SPM:**
-→ [berikan tip atau perkara penting untuk diingat]
+→ [tip penting untuk diingat]
 
 PERATURAN:
 - Gunakan Bahasa Malaysia SPM yang betul
-- Terangkan MENGAPA setiap langkah dilakukan, bukan sekadar APA
-- Gunakan bahasa yang mudah difahami pelajar tingkatan 4 dan 5
+- Terangkan MENGAPA setiap langkah dilakukan
 - Jangan ulang semula pengiraan — TERANGKAN sahaja"""
 
                 explanation = await call_llm(explanation_prompt, max_tokens=600)
@@ -310,12 +502,9 @@ PERATURAN:
 
             elapsed = (time.time() - t0) * 1000
             return ChatResponse(
-                question=req.question,
-                answer=final_answer,
-                answer_type="calculation",
-                sources=sources,
-                retrieval_scores=retrieval_scores,
-                solver_used=True,
+                question=req.question, answer=final_answer,
+                answer_type="calculation", sources=sources,
+                retrieval_scores=retrieval_scores, solver_used=True,
                 context_found=context_found,
                 processing_time_ms=round(elapsed, 1),
                 session_id=req.session_id,
@@ -324,23 +513,16 @@ PERATURAN:
         except Exception as e:
             logger.warning(f"Solver failed for task '{task}': {e}. Falling back to RAG.")
 
-    # ── Step 2B: Theory / RAG path ────────────────────────────────────────
+    # ── Theory / RAG path ──────────────────────────────────────────────────
     rag_results = retriever.retrieve(
-        query=req.question,
-        k=req.top_k,
+        query=req.question, k=req.top_k,
         chapter_filter=req.chapter_filter,
         tingkatan_filter=req.tingkatan_filter,
     )
 
     sources = [
-        {
-            "chunk_id": r.chunk_id,
-            "topic": r.topic,
-            "subtopic": r.subtopic,
-            "content_type": r.content_type,
-            "chapter": r.chapter,
-            "score": round(r.score, 4),
-        }
+        {"chunk_id": r.chunk_id, "topic": r.topic, "subtopic": r.subtopic,
+         "content_type": r.content_type, "chapter": r.chapter, "score": round(r.score, 4)}
         for r in rag_results
     ]
     retrieval_scores = [r.score for r in rag_results]
@@ -352,22 +534,17 @@ PERATURAN:
         answer = await call_llm(prompt, max_tokens=700)
         answer_type = "theory"
     else:
-        # No sufficient context found — anti-hallucination response
         answer = (
             "Maaf, soalan ini tidak terdapat dalam nota kimia saya. "
-            "Sila rujuk buku teks SPM atau tanya guru kamu untuk maklumat yang lebih tepat."
+            "Sila rujuk buku teks SPM atau tanya guru kamu."
         )
         answer_type = "fallback"
 
     elapsed = (time.time() - t0) * 1000
     return ChatResponse(
-        question=req.question,
-        answer=answer,
-        answer_type=answer_type,
-        sources=sources,
-        retrieval_scores=retrieval_scores,
-        solver_used=False,
-        context_found=context_found,
+        question=req.question, answer=answer, answer_type=answer_type,
+        sources=sources, retrieval_scores=retrieval_scores,
+        solver_used=False, context_found=context_found,
         processing_time_ms=round(elapsed, 1),
         session_id=req.session_id,
     )
@@ -384,12 +561,13 @@ async def root():
 
 @app.get("/api/health", response_model=HealthResponse, tags=["Health"])
 async def health():
-    components = {}
-    components["embedder"] = "ok" if "embedder" in _app_state else "not loaded"
-    components["retriever"] = "ok" if "retriever" in _app_state else "not loaded"
-    components["solver"] = "ok" if "solve_fn" in _app_state else "not loaded"
-    components["router"] = "ok" if "route_fn" in _app_state else "not loaded"
-
+    components = {
+        "embedder": "ok" if "embedder" in _app_state else "not loaded",
+        "retriever": "ok" if "retriever" in _app_state else "not loaded",
+        "solver": "ok" if "solve_fn" in _app_state else "not loaded",
+        "router": "ok" if "route_fn" in _app_state else "not loaded",
+        "telegram": "ok" if "telegram_app" in _app_state else "not loaded",
+    }
     index_stats = {}
     try:
         retriever = _app_state.get("retriever")
@@ -402,101 +580,78 @@ async def health():
     return HealthResponse(status=overall, components=components, index_stats=index_stats)
 
 
+@app.post("/webhook", tags=["Telegram"])
+async def telegram_webhook(request: Request):
+    """Receive Telegram updates via webhook."""
+    telegram_app = _app_state.get("telegram_app")
+    if not telegram_app:
+        raise HTTPException(503, "Telegram bot not initialized")
+
+    try:
+        from telegram import Update
+        data = await request.json()
+        update = Update.de_json(data, telegram_app.bot)
+        await telegram_app.process_update(update)
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
 @app.post("/api/chat", response_model=ChatResponse, tags=["Chat"])
 async def chat(req: ChatRequest):
-    """
-    Main Q&A endpoint.
-    Routes to deterministic solver for calculations,
-    or RAG + LLM for theory / explanation questions.
-    """
     return await answer_question(req)
 
 
 @app.post("/api/solve", response_model=SolveResponse, tags=["Solver"])
 async def solve(req: SolveRequest):
-    """
-    Calculation-only endpoint.
-    Uses deterministic Python solver — no LLM.
-    Returns SPM-formatted answer or error.
-    """
     route_fn = _app_state.get("route_fn")
     solve_fn = _app_state.get("solve_fn")
     if not route_fn or not solve_fn:
         raise HTTPException(503, "Solver not loaded")
 
     task, data = route_fn(req.question)
-
-    # Fix: handle jmr when data is None
     if task == "jmr" and data is None:
         import re
         formulas = re.findall(r"[A-Z][A-Za-z0-9()]+", req.question)
-        bad = {"Hitungkan","Tentukan","Berapakah","Jisim","Molar","Formula","Hitung"}
+        bad = {"Hitungkan", "Tentukan", "Berapakah", "Jisim", "Molar", "Formula", "Hitung"}
         formulas = [f for f in formulas if f not in bad]
         if formulas:
             data = {"task": "jmr", "formula": formulas[0], "formulas": formulas}
 
     if task == "unknown" or data is None:
         return SolveResponse(
-            question=req.question,
-            task=task,
-            answer="",
-            success=False,
+            question=req.question, task=task, answer="", success=False,
             error=f"Tidak dapat mengenalpasti jenis pengiraan. Task: {task}",
         )
     try:
         answer = solve_fn(task, data)
-        return SolveResponse(
-            question=req.question,
-            task=task,
-            answer=answer,
-            success=True,
-        )
+        return SolveResponse(question=req.question, task=task, answer=answer, success=True)
     except Exception as e:
-        return SolveResponse(
-            question=req.question,
-            task=task,
-            answer="",
-            success=False,
-            error=str(e),
-        )
+        return SolveResponse(question=req.question, task=task, answer="", success=False, error=str(e))
 
 
 @app.post("/api/retrieve", response_model=RetrieveResponse, tags=["RAG"])
 async def retrieve(req: RetrieveRequest):
-    """
-    Raw retrieval endpoint for debugging and testing.
-    Returns top-k chunks with scores and metadata.
-    """
     retriever = _app_state.get("retriever")
     if not retriever:
         raise HTTPException(503, "Retriever not loaded")
 
     results = retriever.retrieve(
-        query=req.query,
-        k=req.k,
+        query=req.query, k=req.k,
         chapter_filter=req.chapter_filter,
         tingkatan_filter=req.tingkatan_filter,
         score_threshold=req.score_threshold,
         index_names=req.index_names,
     )
-
     return RetrieveResponse(
         query=req.query,
         results=[
-            {
-                "rank": r.rank,
-                "score": round(r.score, 4),
-                "chunk_id": r.chunk_id,
-                "topic": r.topic,
-                "subtopic": r.subtopic,
-                "content_type": r.content_type,
-                "chapter": r.chapter,
-                "tingkatan": r.tingkatan,
-                "has_worked_example": r.has_worked_example,
-                "formulas": r.formulas,
-                "diagrams": r.diagrams,
-                "content_preview": r.content[:300],
-            }
+            {"rank": r.rank, "score": round(r.score, 4), "chunk_id": r.chunk_id,
+             "topic": r.topic, "subtopic": r.subtopic, "content_type": r.content_type,
+             "chapter": r.chapter, "tingkatan": r.tingkatan,
+             "has_worked_example": r.has_worked_example,
+             "formulas": r.formulas, "content_preview": r.content[:300]}
             for r in results
         ],
         count=len(results),
@@ -505,114 +660,42 @@ async def retrieve(req: RetrieveRequest):
 
 @app.post("/api/quiz", tags=["Quiz"])
 async def generate_quiz(req: QuizRequest):
-    """
-    Generate quiz questions from the knowledge base.
-    Uses RAG to retrieve relevant content then LLM to form questions.
-    """
     retriever = _app_state.get("retriever")
     if not retriever:
         raise HTTPException(503, "Retriever not loaded")
 
-    # Retrieve relevant content for this topic
-    results = retriever.retrieve(
-        query=req.topic,
-        k=8,
-        chapter_filter=req.chapter,
-        tingkatan_filter=req.tingkatan,
-    )
-
+    results = retriever.retrieve(query=req.topic, k=8, chapter_filter=req.chapter)
     if not results:
-        raise HTTPException(404, f"Tiada kandungan ditemui untuk topik: {req.topic}")
+        raise HTTPException(404, f"Tiada kandungan untuk topik: {req.topic}")
 
     context = retriever.build_context(results, max_chars=2500)
-
     quiz_prompt = f"""Kamu adalah Cikgu AI Kimia. Berdasarkan nota berikut, buat {req.num_questions} soalan {req.question_type.upper()} dalam Bahasa Malaysia.
 
 NOTA:
 {context}
 
-FORMAT SOALAN (JSON):
-{{
-  "questions": [
-    {{
-      "soalan": "...",
-      "pilihan": ["A. ...", "B. ...", "C. ...", "D. ..."],  // hanya untuk MCQ
-      "jawapan": "A",
-      "penjelasan": "..."
-    }}
-  ]
-}}
-
-Hasilkan HANYA JSON yang sah. Tiada teks lain."""
+FORMAT (JSON sahaja, tiada teks lain):
+{{"questions": [{{"soalan": "...", "pilihan": ["A. ...", "B. ...", "C. ...", "D. ..."], "jawapan": "A", "penjelasan": "..."}}]}}"""
 
     raw = await call_llm(quiz_prompt, max_tokens=1200)
 
-    # Parse JSON safely
     import json, re
     try:
         json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-        if json_match:
-            quiz_data = json.loads(json_match.group())
-        else:
-            quiz_data = {"raw": raw, "parse_error": True}
+        quiz_data = json.loads(json_match.group()) if json_match else {"raw": raw}
     except Exception as e:
         quiz_data = {"raw": raw, "parse_error": str(e)}
 
-    return {
-        "topic": req.topic,
-        "question_type": req.question_type,
-        "num_questions": req.num_questions,
-        "quiz": quiz_data,
-        "sources_used": len(results),
-    }
+    return {"topic": req.topic, "question_type": req.question_type,
+            "num_questions": req.num_questions, "quiz": quiz_data, "sources_used": len(results)}
 
 
 @app.get("/api/index/stats", tags=["Admin"])
 async def index_stats():
-    """Return FAISS index statistics."""
     retriever = _app_state.get("retriever")
     if not retriever:
         raise HTTPException(503, "Retriever not loaded")
     return retriever.manager.stats()
-
-
-@app.post("/api/index/rebuild", tags=["Admin"])
-async def rebuild_index(background_tasks: BackgroundTasks):
-    """
-    Trigger index rebuild from knowledge base.
-    Runs in background — returns immediately.
-    """
-    kb_dir = os.environ.get("KB_DIR", str(BASE_DIR / "knowledge_base"))
-
-    async def _rebuild():
-        try:
-            from chunker import chunk_all_files
-            from metadata_tagger import tag_chunks
-            from indexer import build_indexes_from_chunks
-
-            embedder = _app_state.get("embedder")
-            if not embedder:
-                logger.error("Embedder not loaded — cannot rebuild")
-                return
-
-            logger.info(f"Rebuilding index from {kb_dir}...")
-            raw = chunk_all_files(kb_dir)
-            tagged = tag_chunks(raw)
-            build_indexes_from_chunks(tagged, embedder, index_dir=INDEX_DIR)
-
-            # Reload retriever
-            from retriever import ChemistryRetriever
-            _app_state["retriever"] = ChemistryRetriever(
-                index_dir=INDEX_DIR,
-                embedder=embedder,
-                score_threshold=SCORE_THRESHOLD,
-            )
-            logger.info("Index rebuild complete.")
-        except Exception as e:
-            logger.error(f"Index rebuild failed: {e}")
-
-    background_tasks.add_task(_rebuild)
-    return {"message": "Index rebuild started in background.", "kb_dir": kb_dir}
 
 
 # ---------------------------------------------------------------------------
@@ -621,10 +704,4 @@ async def rebuild_index(background_tasks: BackgroundTasks):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info",
-    )
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
