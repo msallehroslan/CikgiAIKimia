@@ -297,8 +297,10 @@ def extract_equation(text: str) -> Optional[str]:
     right = t[arrow_pos + 2:].strip()
 
     # Trim right at first clause/sentence boundary
-    for sep in ['. ', ', jika ', ', apabila ', ', dan ', ', if ',
-                ', when ', ', berapakah', ', hitungkan']:
+    # Include space-only versions (no comma) for BM patterns
+    for sep in ['. ', ', jika ', ' jika ', ', apabila ', ' apabila ',
+                ', dan ', ', if ', ', when ', ', berapakah', ', hitungkan',
+                ' bertindak balas', ' sepenuhnya']:
         pos = right.find(sep)
         if pos != -1:
             right = right[:pos]
