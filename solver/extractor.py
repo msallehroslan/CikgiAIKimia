@@ -47,6 +47,9 @@ BM_STOPWORDS = {
 # =====================================
 def normalize_text(text: str) -> str:
     t = text.strip()
+    # Strip atomic mass hints e.g. [Fe=56, O=16] [Zn=65] before parsing
+    # These break equation extraction when placed after equation RHS
+    t = re.sub(r'\s*\[[A-Za-z][A-Za-z0-9=,\s.]*\]', '', t)
     t = t.replace("\u00a0", " ")
     t = t.replace("\\text{", "")
     t = t.replace("}", "")
@@ -282,6 +285,10 @@ def extract_equation(text: str) -> Optional[str]:
     Handles equation at start, middle, or end of question.
     """
     t = normalize_text(text)
+    # Strip Ar notation like [Zn=65] [Fe=56, O=16] before parsing
+    t = re.sub(r'\[[^\]]*\]', ' ', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+
     arrow_pos = t.find('->')
     if arrow_pos == -1:
         return None
