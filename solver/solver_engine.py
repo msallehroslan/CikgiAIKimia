@@ -286,7 +286,131 @@ def solve_stoichiometry_mass_to_volume(equation: str, given_formula: str, given_
     )
 
 
-def solve_stoichiometry_mass_to_mass(equation: str, given_formula: str, given_mass_g: float, target_formula: str) -> str:
+def solve_stoichiometry_volume_to_mass(
+    equation: str,
+    given_formula: str,
+    given_volume_cm3: float,
+    target_formula: str,
+    condition: Optional[str] = None,
+) -> str:
+    """
+    Q38, Q39: Stoichiometry where GAS VOLUME is given, MASS is asked.
+    e.g. "120cm³ Cl2 + Fe -> FeCl3, jisim FeCl3?"
+    e.g. "360cm3 CO2 terhasil, jisim butanol?"
+    """
+    vm = get_vm(condition)
+    label = condition_label(condition, vm)
+    given_vol_dm3 = given_volume_cm3 / 1000.0
+    given_n = given_vol_dm3 / vm
+    ratio = get_ratio(equation, given_formula, target_formula)
+    target_n = given_n * ratio
+    target_M = molar_mass(target_formula)
+    target_mass = target_n * target_M
+    return spm_format(
+        diberi=[
+            f"Persamaan = {equation}",
+            f"Isipadu {given_formula} = {fmt_num(given_volume_cm3, 3)} cm\u00b3 = {fmt_num(given_vol_dm3, 4)} dm\u00b3",
+            f"Keadaan = {label}",
+            f"Vm = {vm} dm\u00b3 mol\u207b\u00b9",
+        ],
+        formula=[
+            "n = V \u00f7 Vm",
+            "Nisbah mol daripada persamaan kimia",
+            "m = n \u00d7 M",
+        ],
+        pengiraan=[
+            f"n({given_formula}) = {fmt_num(given_vol_dm3, 4)} \u00f7 {vm} = {fmt_num(given_n, 4)} mol",
+            f"Nisbah {given_formula} : {target_formula} = {fmt_num(ratio, 3)}",
+            f"n({target_formula}) = {fmt_num(given_n, 4)} \u00d7 {fmt_num(ratio, 3)} = {fmt_num(target_n, 4)} mol",
+            f"M({target_formula}) = {fmt_num(target_M, 2)} g mol\u207b\u00b9",
+            f"m({target_formula}) = {fmt_num(target_n, 4)} \u00d7 {fmt_num(target_M, 2)} = {fmt_num(target_mass, 3)} g",
+        ],
+        jawapan=[f"Jisim {target_formula} = {fmt_num(target_mass, 3)} g"],
+    )
+
+
+def solve_voltaic_cell(
+    anode_formula: str,
+    cathode_formula: str,
+    e0_anode: float,
+    e0_cathode: float,
+) -> str:
+    """
+    Q34: Voltaic cell EMF calculation.
+    E0cell = E0katod - E0anod
+    e.g. Zn-Cu cell: E0 = +0.34 - (-0.76) = +1.10V
+    """
+    e0_cell = e0_cathode - e0_anode
+    cell_type = "spontan" if e0_cell > 0 else "tidak spontan"
+    return spm_format(
+        diberi=[
+            f"Anod (-) = {anode_formula}",
+            f"Katod (+) = {cathode_formula}",
+            f"E\u2070 anod ({anode_formula}) = {fmt_num(e0_anode, 2)} V",
+            f"E\u2070 katod ({cathode_formula}) = {fmt_num(e0_cathode, 2)} V",
+        ],
+        formula=["E\u2070sel = E\u2070katod \u2212 E\u2070anod"],
+        pengiraan=[
+            f"E\u2070sel = {fmt_num(e0_cathode, 2)} \u2212 ({fmt_num(e0_anode, 2)})",
+            f"E\u2070sel = {fmt_num(e0_cathode, 2)} + {fmt_num(abs(e0_anode), 2)}" if e0_anode < 0 else "",
+            f"E\u2070sel = {fmt_num(e0_cell, 2)} V",
+        ],
+        jawapan=[
+            f"Voltan sel, E\u2070sel = {fmt_num(e0_cell, 2)} V",
+            f"Sel adalah {cell_type} (E\u2070sel {'> 0' if e0_cell > 0 else '< 0'})",
+        ],
+    )
+
+
+def solve_molarity_from_delta_h(
+    volume1_cm3: float,
+    volume2_cm3: float,
+    delta_t: float,
+    delta_h_kj_mol: float,
+    density: float = 1.0,
+    specific_heat: float = 4.2,
+) -> str:
+    """
+    Q37: Find molarity given ΔH and ΔT.
+    e.g. 25cm3 HNO3 + 25cm3 KOH, ΔT=7°C, ΔH=-57.3 kJ/mol → cari kemolaran
+    Steps:
+    1. Q = mcΔT (total mass = sum of volumes × density)
+    2. mol = Q ÷ |ΔH|
+    3. M = mol ÷ V (volume of ONE solution)
+    """
+    total_vol_cm3 = volume1_cm3 + volume2_cm3
+    total_mass_g = total_vol_cm3 * density
+    q_joules = total_mass_g * specific_heat * delta_t
+    q_kj = q_joules / 1000.0
+    moles = q_kj / abs(delta_h_kj_mol)
+    vol_one_dm3 = volume1_cm3 / 1000.0
+    molarity = moles / vol_one_dm3
+    return spm_format(
+        diberi=[
+            f"Isipadu larutan 1 = {fmt_num(volume1_cm3, 1)} cm\u00b3",
+            f"Isipadu larutan 2 = {fmt_num(volume2_cm3, 1)} cm\u00b3",
+            f"Jumlah isipadu = {fmt_num(total_vol_cm3, 1)} cm\u00b3",
+            f"\u0394T = {fmt_num(delta_t, 2)} \u00b0C",
+            f"\u0394H = {fmt_num(delta_h_kj_mol, 1)} kJ mol\u207b\u00b9",
+            f"c = {specific_heat} J g\u207b\u00b9 \u00b0C\u207b\u00b9",
+            f"Ketumpatan = {density} g cm\u207b\u00b3",
+        ],
+        formula=[
+            "Q = mc\u0394T",
+            "mol = Q \u00f7 |\u0394H|",
+            "M = mol \u00f7 V",
+        ],
+        pengiraan=[
+            f"Jisim larutan = {fmt_num(total_vol_cm3, 1)} \u00d7 {density} = {fmt_num(total_mass_g, 1)} g",
+            f"Q = {fmt_num(total_mass_g, 1)} \u00d7 {specific_heat} \u00d7 {fmt_num(delta_t, 2)} = {fmt_num(q_joules, 1)} J = {fmt_num(q_kj, 3)} kJ",
+            f"mol = {fmt_num(q_kj, 3)} \u00f7 {fmt_num(abs(delta_h_kj_mol), 1)} = {fmt_num(moles, 5)} mol",
+            f"M = {fmt_num(moles, 5)} \u00f7 {fmt_num(vol_one_dm3, 4)} = {fmt_num(molarity, 3)} mol dm\u207b\u00b3",
+        ],
+        jawapan=[f"Kemolaran = {fmt_num(molarity, 3)} mol dm\u207b\u00b3"],
+    )
+
+
+
     given_M = molar_mass(given_formula)
     given_n = given_mass_g / given_M
     ratio = get_ratio(equation, given_formula, target_formula)
@@ -808,6 +932,38 @@ def solve_by_task(task: str, data: Dict[str, Any]) -> str:
         if not formula:
             raise ValueError("Formula diperlukan.")
         return solve_volume_from_mass_multistep(data["mass_g"], formula, data.get("condition"))
+
+    if task == "stoichiometry_volume_to_mass":
+        equation = data["equation"]
+        given_formula = data.get("given_formula")
+        target_formula = data.get("target_formula")
+        if not given_formula or not target_formula:
+            raise ValueError("Formula diberi dan sasaran diperlukan.")
+        given_volume_cm3 = data.get("given_volume_cm3") or data.get("volume_cm3")
+        if not given_volume_cm3:
+            raise ValueError("Isipadu gas diperlukan dalam cm3.")
+        return solve_stoichiometry_volume_to_mass(
+            equation, given_formula, given_volume_cm3,
+            target_formula, data.get("condition"),
+        )
+
+    if task == "voltaic_cell":
+        return solve_voltaic_cell(
+            data["anode_formula"],
+            data["cathode_formula"],
+            data["e0_anode"],
+            data["e0_cathode"],
+        )
+
+    if task == "molarity_from_delta_h":
+        return solve_molarity_from_delta_h(
+            data["volume1_cm3"],
+            data["volume2_cm3"],
+            data["delta_t"],
+            data["delta_h_kj_mol"],
+            data.get("density", 1.0),
+            data.get("specific_heat", 4.2),
+        )
 
     if task == "stoichiometry_mass_to_volume":
         equation = data["equation"]

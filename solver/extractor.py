@@ -786,6 +786,32 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
             temperatures = [t_initial, t_final]
 
         if len(temperatures) >= 2:
+            # FIX Q37: molarity_from_delta_h
+            # Trigger: ΔH given in kJ/mol AND asking for molarity/kemolaran
+            delta_h_pattern = re.search(
+                r'(?:delta\s*h|enthalpi|entalpi|deltaH|\u0394H)\s*=?\s*[+-]?\s*(\d+\.?\d*)\s*kj',
+                ql
+            )
+            asks_molarity = any(k in ql for k in [
+                "kemolaran", "molarity", "apakah kemolaran", "what is the molarity",
+                "mol dm", "kepekatan molar",
+            ])
+            if delta_h_pattern and asks_molarity and len(volumes_cm3) >= 2:
+                delta_h_val = float(delta_h_pattern.group(1))
+                # Detect sign from question
+                if re.search(r'-\s*' + delta_h_pattern.group(1), ql):
+                    delta_h_val = -delta_h_val
+                delta_t = abs(temperatures[1] - temperatures[0])
+                return {
+                    "task": "molarity_from_delta_h",
+                    "volume1_cm3": volumes_cm3[0],
+                    "volume2_cm3": volumes_cm3[1],
+                    "delta_t": delta_t,
+                    "delta_h_kj_mol": delta_h_val,
+                    "density": 1.0,
+                    "specific_heat": 4.2,
+                }
+
             if total_mass and calc_moles:
                 return {
                     "task": "delta_h_from_calorimetry",
@@ -917,6 +943,31 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     if empirical:
         return {"task": "empirical_formula", "element_masses": empirical}
 
+    # Voltaic cell — E0cell = E0katod - E0anod
+    # e.g. "Zn2+/Zn E0=-0.76V, Cu2+/Cu E0=+0.34V, berapakah voltan sel?"
+    if any(k in ql for k in [
+        "e0", "e⁰", "keupayaan elektrod", "electrode potential",
+        "voltan sel", "cell voltage", "emf", "sel volta",
+        "voltaic", "galvanic", "electrochemical",
+    ]):
+        # Extract E0 values from question
+        e0_values = re.findall(r'e0?\s*=\s*([+-]?\d+\.?\d*)\s*v', ql)
+        if len(e0_values) >= 2:
+            vals = [float(v) for v in e0_values]
+            # Cathode = more positive (higher E0), Anode = more negative
+            e0_cathode = max(vals)
+            e0_anode = min(vals)
+            # Try to get formulas for anode/cathode
+            anode_f = formulas[-1] if formulas else "Anod"
+            cathode_f = formulas[0] if formulas else "Katod"
+            return {
+                "task": "voltaic_cell",
+                "anode_formula": anode_f,
+                "cathode_formula": cathode_f,
+                "e0_anode": e0_anode,
+                "e0_cathode": e0_cathode,
+            }
+
     # Oxidation number — FIX BUG #3: charge now correctly parsed
     ox = extract_oxidation_target(q, formulas)
     # Also detect question-form: "Tentukan nombor pengoksidaan..."
@@ -951,18 +1002,40 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     # Stoichiometry — equation present + mass given
     # FIX Q4/Q5: detect mass-to-VOLUME (isipadu gas) vs mass-to-MASS
     # Always parse given_formula from LHS, target from RHS
+    # Stoichiometry VOLUME → MASS (gas diberi, jisim ditanya)
+    # e.g. "120cm3 Cl2 + Fe -> 2FeCl3, jisim FeCl3?"
+    if equation and volumes_cm3 and not masses and any(k in ql for k in [
+        "jisim", "mass", "berapakah jisim", "hitungkan jisim",
+        "terhasil", "terbentuk", "formed", "produce",
+        "bertindak balas", "sepenuhnya", "completely",
+    ]):
+        eq_parts = equation.split('->')
+        lhs_formulas = re.findall(r'[A-Z][A-Za-z0-9()]*', eq_parts[0]) if len(eq_parts) >= 1 else []
+        rhs_formulas = re.findall(r'[A-Z][A-Za-z0-9()]*', eq_parts[1]) if len(eq_parts) >= 2 else []
+        given_f = lhs_formulas[0] if lhs_formulas else None
+        target_f = _find_target_formula(q, rhs_formulas, lhs_formulas)
+        if given_f and target_f and given_f != target_f:
+            return {
+                "task": "stoichiometry_volume_to_mass",
+                "equation": equation,
+                "given_formula": given_f,
+                "given_volume_cm3": volumes_cm3[0],
+                "target_formula": target_f,
+                "condition": condition,
+            }
+
     if equation and masses and any(k in ql for k in [
         "stoichiometry", "stoikiometri", "formed", "terbentuk", "hasilkan",
         "produce", "reacts", "reaction", "mendapan", "precipitate", "pemendapan",
         "terhasil", "dihasilkan", "bertindak balas", "bertindak", "sepenuhnya",
         "completely", "dipanaskan", "dibakar", "terurai",
-        "hitungkan jisim",         # "hitungkan jisim X yang terhasil"
-        "hitungkan isipadu",       # "hitungkan isipadu gas X"
-        "calculate the mass",      # English form
-        "calculate the volume",    # English form
-        "mass of", "volume of",    # partial match
-        "berapakah jisim",         # "berapakah jisim X?"
-        "berapakah isipadu",       # "berapakah isipadu X?"
+        "hitungkan jisim",
+        "hitungkan isipadu",
+        "calculate the mass",
+        "calculate the volume",
+        "mass of", "volume of",
+        "berapakah jisim",
+        "berapakah isipadu",
     ]):
         eq_parts = equation.split('->')
         lhs_formulas = re.findall(r'[A-Z][A-Za-z0-9()]*', eq_parts[0]) if len(eq_parts) >= 1 else []
