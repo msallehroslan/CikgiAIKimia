@@ -226,6 +226,86 @@ def solve_particles_from_mass(mass_g: float, formula_str: str) -> str:
     )
 
 
+# Atoms per molecule for common gases
+ATOMS_PER_MOLECULE = {
+    "Ne": 1, "Ar": 1, "He": 1, "Kr": 1, "Xe": 1,  # monoatomik
+    "H2": 2, "N2": 2, "O2": 2, "F2": 2, "Cl2": 2, "Br2": 2, "I2": 2,  # diatomik
+    "O3": 3, "SO2": 3, "NO2": 3, "CO2": 3, "H2S": 3, "HCl": 2, "HF": 2,  # triatomik
+    "SO3": 4, "NH3": 4, "H2O": 3, "NO": 2,  # 4 atom
+    "CH4": 5, "C2H2": 4, "C2H4": 6, "C2H6": 8, "C3H8": 11,
+}
+
+
+def _atoms_per_molecule(formula: str) -> int:
+    """Count total atoms in one molecule from formula string."""
+    # Check lookup table first
+    if formula in ATOMS_PER_MOLECULE:
+        return ATOMS_PER_MOLECULE[formula]
+    # Parse formula to count atoms
+    try:
+        parsed = parse_formula(formula)
+        return sum(parsed.values())
+    except Exception:
+        return 1
+
+
+def solve_mol_atoms_from_gas(
+    options: List[Dict],
+    target_mol_atoms: float,
+    condition: Optional[str] = None,
+    volume_dm3: Optional[float] = None,
+) -> str:
+    """
+    Q4 SPM: Which gas contains X mol of ATOMS at RTP?
+    e.g. "Which contains 0.6 mol atoms? A) 4.8dm3 Ne B) 4.8dm3 N2 C) 4.8dm3 SO3 D) 4.8dm3 CO2"
+
+    Logic:
+    1. For each option: n_mol = V / Vm
+    2. atoms_per_molecule = count from formula
+    3. mol_atoms = n_mol × atoms_per_molecule
+    4. Find which gives target_mol_atoms
+    """
+    vm = get_vm(condition)
+    label = condition_label(condition, vm)
+    lines = []
+    answer_letter = None
+    answer_formula = None
+
+    for opt in options:
+        letter = opt.get("letter", "?")
+        formula = opt.get("formula", "?")
+        vol = opt.get("volume_dm3", volume_dm3 or 0)
+        n_mol = vol / vm
+        n_atoms_per = _atoms_per_molecule(formula)
+        mol_atoms = n_mol * n_atoms_per
+        lines.append(
+            f"{letter}) {formula}: n = {fmt_num(vol,2)} ÷ {vm} = {fmt_num(n_mol,3)} mol × {n_atoms_per} atom = {fmt_num(mol_atoms,3)} mol atom"
+        )
+        if abs(mol_atoms - target_mol_atoms) < 0.001:
+            answer_letter = letter
+            answer_formula = formula
+
+    if not answer_letter:
+        answer_letter = "?"
+        answer_formula = "Tiada pilihan yang tepat"
+
+    return spm_format(
+        diberi=[
+            f"Isipadu molar = {vm} dm³ mol⁻¹",
+            f"Keadaan = {label}",
+            f"Sasaran = {fmt_num(target_mol_atoms, 2)} mol atom",
+        ],
+        formula=["n = V ÷ Vm", "mol atom = n × bilangan atom per molekul"],
+        pengiraan=lines,
+        jawapan=[
+            f"Jawapan: {answer_letter} — {answer_formula}",
+            f"Mengandungi {fmt_num(target_mol_atoms, 2)} mol atom",
+        ],
+    )
+
+
+
+
 def solve_mass_from_volume(volume_dm3: float, formula_str: str, condition: Optional[str] = None) -> str:
     vm = get_vm(condition)
     n = volume_dm3 / vm
@@ -932,6 +1012,14 @@ def solve_by_task(task: str, data: Dict[str, Any]) -> str:
         if not formula:
             raise ValueError("Formula diperlukan.")
         return solve_volume_from_mass_multistep(data["mass_g"], formula, data.get("condition"))
+
+    if task == "mol_atoms_from_gas":
+        return solve_mol_atoms_from_gas(
+            data["options"],
+            data["target_mol_atoms"],
+            data.get("condition"),
+            data.get("volume_dm3"),
+        )
 
     if task == "stoichiometry_volume_to_mass":
         equation = data["equation"]

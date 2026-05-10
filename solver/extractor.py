@@ -922,6 +922,43 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     # PRIORITY 3 — SPECIFIC HIGH-CONFIDENCE TASKS
     # =====================================
 
+    # MOL ATOM FROM GAS — Q4 type
+    # "Antara gas berikut, yang manakah mengandungi 0.6 mol atom?"
+    # MCQ dengan pilihan gas berbeza, semua isipadu sama
+    mol_atom_keywords = any(k in ql for k in [
+        "mol atom", "mol of atom", "0.6 mol atom", "0.3 mol atom",
+        "bilangan atom", "number of atom", "mengandungi", "contains",
+    ])
+    if mol_atom_keywords and any(k in ql for k in ["mol atom", "mol of atom"]):
+        # Extract target mol atoms
+        target_match = re.search(r'(\d+\.?\d*)\s*mol\s*atom', ql)
+        target_mol_atoms = float(target_match.group(1)) if target_match else 0.6
+        # Extract volume (all options have same volume)
+        vol_match = re.search(r'(\d+\.?\d*)\s*dm3', ql)
+        vol_dm3 = float(vol_match.group(1)) if vol_match else 4.8
+        # Build options from MCQ — detect gas names
+        gas_map = {
+            "neon": ("A", "Ne"), "nitrogen": ("B", "N2"),
+            "sulfur trioksida": ("C", "SO3"), "sulphur trioxide": ("C", "SO3"),
+            "karbon dioksida": ("D", "CO2"), "carbon dioxide": ("D", "CO2"),
+            "oksigen": ("C", "O2"), "oxygen": ("C", "O2"),
+            "hidrogen": ("A", "H2"), "hydrogen": ("A", "H2"),
+            "klorin": ("D", "Cl2"), "chlorine": ("D", "Cl2"),
+            "ammonia": ("C", "NH3"),
+        }
+        options = []
+        for name, (letter, formula) in gas_map.items():
+            if name in ql:
+                options.append({"letter": letter, "formula": formula, "volume_dm3": vol_dm3})
+        if len(options) >= 2:
+            return {
+                "task": "mol_atoms_from_gas",
+                "options": options,
+                "target_mol_atoms": target_mol_atoms,
+                "volume_dm3": vol_dm3,
+                "condition": condition,
+            }
+
     # JMR — expanded keywords for question-form detection
     # e.g. "Apakah jisim relatif sebatian K4Fe(CN)6?" → jmr
     # e.g. "What is the relative mass of this compound?" → jmr

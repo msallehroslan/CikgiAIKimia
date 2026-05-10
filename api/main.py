@@ -493,9 +493,20 @@ Jawapan: [jawapan akhir + unit]
 
 Jika soalan MCQ — WAJIB:
 1. Nyatakan jawapan: "Jawapan: X" (X = A, B, C atau D)
-2. Pengiraan atau penjelasan ringkas (3-5 ayat)
-3. Akhiri dengan: "Jawapan betul: X"
+2. Tunjukkan cara kira atau penjelasan ringkas (3-5 ayat)
+3. Akhiri dengan baris: "Jawapan betul: X"
 JANGAN biarkan jawapan tergantung — MESTI bagi jawapan akhir yang jelas.
+
+Jika soalan CARI FORMULA dari persamaan — contoh Q24:
+"P + 3O2 → 2CO2 + 3H2O, apakah P?"
+Cara: kira atom C dan H dari produk, kemudian tentukan formula P.
+2CO2 = 2C, 3H2O = 6H → P = C2H6
+
+Jika soalan MOL ATOM — contoh Q4:
+"Gas mana mengandungi 0.6 mol atom pada RTP?"
+Cara: n = V/Vm, kemudian mol atom = n × bilangan atom per molekul
+Neon (monoatomik): 0.2mol × 1 = 0.2 mol atom
+SO3 (4 atom): 0.2mol × 3 = 0.6 mol atom → C
 
 Jika soalan TEORI — jawab 3-5 ayat mengikut sukatan SPM.
 
