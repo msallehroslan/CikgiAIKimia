@@ -188,7 +188,9 @@ def extract_molarity_values(text: str) -> List[float]:
     """
     FIX BUG #7: only extract molarity values when EXPLICITLY tied to mol dm-3 unit.
     Do NOT extract bare numbers as molarity — prevents 0.4 mol/dm3 being read as pOH=0.4
+    FIX VISION: strip MCQ options first so "A. 141 B. 256" not parsed as molarity
     """
+    text = _clean_mcq_options(text)
     vals: List[float] = []
     tl = text.lower()
     # Must be explicitly "X mol dm3" or "X M" (with word boundary)
@@ -616,6 +618,10 @@ def is_titration_question(ql: str) -> bool:
 # STRUCTURED EXTRACTOR
 # =====================================
 def structured_extract(question: str) -> Optional[Dict[str, Any]]:
+    # FIX VISION: preprocess structured Scout output format first
+    # Strips MCQ options, parses SOALAN/PILIHAN/DATA sections
+    question = preprocess_vision_question(question)
+
     q = normalize_text(question)
     ql = q.lower()
 
