@@ -1,7 +1,7 @@
 """
 main.py — Cikgu AI Kimia FastAPI Application
 =============================================
-Version 3.1.0 — LLM Discipline + Bug Fixes
+Version 3.2.0 — Photo/Vision Support
 
 Changes in v3.1.0:
   - LLM hanya untuk: (1) explain solver output, (2) teori dengan RAG context
@@ -37,11 +37,30 @@ sys.path.insert(0, str(BASE_DIR / "api"))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("cikgu_ai_kimia")
 
-INDEX_DIR       = os.environ.get("FAISS_INDEX_DIR", str(BASE_DIR / "faiss_indexes"))
-SCORE_THRESHOLD = float(os.environ.get("RETRIEVAL_THRESHOLD", "0.30"))
+# Vision module — multi-provider (groq/gemini/tesseract/none)
+try:
+    from vision import extract_question_from_image, vision_is_enabled, vision_provider_info
+    VISION_AVAILABLE = True
+except ImportError:
+    VISION_AVAILABLE = False
+    logger.warning("vision.py not found — photo support disabled")
+    def vision_is_enabled(): return False
+    def vision_provider_info(): return {"provider": "none", "enabled": False}
+
+INDEX_DIR         = os.environ.get("FAISS_INDEX_DIR", str(BASE_DIR / "faiss_indexes"))
+SCORE_THRESHOLD   = float(os.environ.get("RETRIEVAL_THRESHOLD", "0.30"))
 MAX_CONTEXT_CHARS = int(os.environ.get("MAX_CONTEXT_CHARS", "3000"))
-TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-API_BASE_URL    = os.environ.get("API_BASE_URL", "")
+TELEGRAM_TOKEN    = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+API_BASE_URL      = os.environ.get("API_BASE_URL", "")
+
+# ── LLM MODEL CONFIG ─────────────────────────────────────────────────────────
+# 3 models, 3 different tasks, 3 separate RPD pools
+# llama-3.3-70b  → theory (RAG) — 1K RPD, better reasoning
+# llama-3.1-8b   → explain solver output — 14.4K RPD, faster, cheaper
+# llama-4-scout  → vision (photo) — 1K RPD, multimodal
+GROQ_MODEL         = os.environ.get("GROQ_MODEL",         "llama-3.3-70b-versatile")
+GROQ_EXPLAIN_MODEL = os.environ.get("GROQ_EXPLAIN_MODEL", "llama-3.1-8b-instant")
+GROQ_VISION_MODEL  = os.environ.get("GROQ_VISION_MODEL",  "meta-llama/llama-4-scout-17b-16e-instruct")
 
 _app_state: Dict[str, Any] = {}
 
@@ -355,6 +374,99 @@ async def setup_telegram(app_instance):
             elif query.data == "mode_calc":
                 await query.edit_message_text("🧮 *Mod Pengiraan*\nContoh: Hitung mol 4g NaOH", parse_mode=ParseMode.MARKDOWN)
 
+        async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            """
+            Handle photo messages from students.
+            Flow: Photo → vision.py → extract text → call_api → answer
+            """
+            user_id = update.effective_user.id
+
+            # Check if vision is enabled
+            if not vision_is_enabled():
+                await update.message.reply_text(
+                    "📷 *Maaf, sokongan gambar belum aktif.*\n\n"
+                    "Sila taip soalan anda dalam teks.\n"
+                    "_Contoh: Hitungkan mol 4g NaOH_",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+                return
+
+            await update.message.chat.send_action(ChatAction.UPLOAD_PHOTO)
+            await update.message.reply_text(
+                "📷 _Gambar diterima. Sedang membaca soalan..._",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+            try:
+                # ── Step 1: Download photo from Telegram ──────────────────
+                # Get highest resolution photo
+                photo = update.message.photo[-1]
+                photo_file = await context.bot.get_file(photo.file_id)
+
+                # Download as bytes
+                import io
+                photo_bytes_io = io.BytesIO()
+                await photo_file.download_to_memory(photo_bytes_io)
+                image_bytes = photo_bytes_io.getvalue()
+
+                logger.info(f"Photo received: {len(image_bytes)} bytes from user {user_id}")
+
+                # ── Step 2: Detect language from caption if any ───────────
+                caption = update.message.caption or ""
+                lang = detect_language(caption) if caption else "BM"
+
+                # ── Step 3: Extract question text from image ──────────────
+                await update.message.chat.send_action(ChatAction.TYPING)
+                extracted_text = await extract_question_from_image(image_bytes, lang=lang)
+
+                if not extracted_text or len(extracted_text.strip()) < 5:
+                    await update.message.reply_text(
+                        "⚠️ _Tidak dapat membaca teks dalam gambar._\n\n"
+                        "Cuba:\n"
+                        "• Pastikan gambar jelas dan tidak kabur\n"
+                        "• Cahaya mencukupi\n"
+                        "• Atau taip soalan dalam teks terus",
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+                    return
+
+                # ── Step 4: Show extracted text to user ───────────────────
+                preview = extracted_text[:200] + "..." if len(extracted_text) > 200 else extracted_text
+                await update.message.reply_text(
+                    f"📝 *Soalan yang dibaca:*\n\n`{preview}`\n\n"
+                    f"_Sedang mengira jawapan..._",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+
+                # ── Step 5: Send to normal pipeline ──────────────────────
+                await update.message.chat.send_action(ChatAction.TYPING)
+                result = await call_api(extracted_text, session_id=f"tg_{user_id}")
+
+                answer      = result.get("answer", "Maaf, tiada jawapan.")
+                answer_type = result.get("answer_type", "fallback")
+                sources     = result.get("sources", [])
+                ms          = result.get("processing_time_ms", 0)
+                from_cache  = result.get("from_cache", False)
+                provider    = vision_provider_info().get("provider", "?").upper()
+
+                formatted = format_answer(answer, answer_type)
+                src_lines = [f"• {s.get('topic','')}" for s in sources[:2] if s.get('topic')]
+                if src_lines:
+                    formatted += "\n\n📖 _" + ", ".join(src_lines) + "_"
+                formatted += f"\n_📷 {provider} Vision | {'⚡ Cache' if from_cache else '⏱'} {ms:.0f}ms_"
+
+                if len(formatted) > 4096:
+                    for chunk in [formatted[i:i+4000] for i in range(0, len(formatted), 4000)]:
+                        await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+                else:
+                    await update.message.reply_text(formatted, parse_mode=ParseMode.MARKDOWN)
+
+            except Exception as e:
+                logger.error(f"Photo handler error: {e}")
+                await update.message.reply_text(
+                    "⚠️ Ralat semasa memproses gambar. Sila cuba lagi atau taip soalan dalam teks.",
+                )
+
         async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             question = update.message.text.strip()
             if not question or len(question) < 3:
@@ -393,6 +505,7 @@ async def setup_telegram(app_instance):
         telegram_app.add_handler(CommandHandler("stats", cmd_stats))
         telegram_app.add_handler(CallbackQueryHandler(button_handler))
         telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
         await telegram_app.initialize()
         _app_state["telegram_app"] = telegram_app
@@ -498,22 +611,32 @@ class HealthResponse(BaseModel):
     index_stats: Dict[str, Any]
 
 
-async def call_llm(prompt: str, max_tokens: int = 250) -> str:
-    groq_key   = os.environ.get("GROQ_API_KEY", "")
-    groq_model = os.environ.get("GROQ_MODEL", "llama-3.1-70b-versatile")
+async def call_llm(
+    prompt: str,
+    max_tokens: int = 250,
+    model: Optional[str] = None,
+) -> str:
+    """
+    Call Groq LLM with specified model.
+    If model not specified, uses GROQ_MODEL (70b for theory).
+    Use GROQ_EXPLAIN_MODEL (8b) for solver explanations.
+    """
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    # Use provided model, else fall back to env var
+    use_model = model or GROQ_MODEL
     if groq_key:
         try:
             from groq import AsyncGroq
             client = AsyncGroq(api_key=groq_key)
             resp = await client.chat.completions.create(
-                model=groq_model,
+                model=use_model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=max_tokens,
                 temperature=0.1,
             )
             return resp.choices[0].message.content
         except Exception as e:
-            logger.error(f"Groq error: {e}")
+            logger.error(f"Groq error (model={use_model}): {e}")
     return ""
 
 
@@ -589,9 +712,11 @@ async def answer_question(req: ChatRequest) -> ChatResponse:
                 retrieval_scores = [r.score for r in rag_results]
 
             # LLM: explain only, no recalculation
+            # Use 8b model — fast, cheap, 14.4K RPD (explanation is simple task)
             explanation = await call_llm(
                 build_explanation_prompt(solver_answer, lang, history_context),
                 max_tokens=200,
+                model=GROQ_EXPLAIN_MODEL,
             )
             translated = translate_solver_output(solver_answer, lang)
             final_answer = translated + "\n\n---\n" + explanation if explanation else translated
@@ -625,9 +750,11 @@ async def answer_question(req: ChatRequest) -> ChatResponse:
                 context    += f"\n--- Petikan {i} ---\n{block}\n"
                 chars_used += len(block)
 
+            # Use 70b model — better reasoning for theory synthesis from notes
             llm_answer = await call_llm(
                 build_theory_prompt(context.strip(), req.question, lang, history_context),
                 max_tokens=300,
+                model=GROQ_MODEL,
             )
             final_answer = llm_answer if llm_answer else fallback_message(lang)
             answer_type  = "theory" if llm_answer else "fallback"
@@ -663,12 +790,15 @@ async def root():
 @app.get("/api/health", response_model=HealthResponse, tags=["Health"])
 async def health():
     components = {
-        "embedder":  "ok" if "embedder"     in _app_state else "not loaded",
-        "retriever": "ok" if "retriever"    in _app_state else "not loaded",
-        "solver":    "ok" if "solve_fn"     in _app_state else "not loaded",
-        "router":    "ok" if "route_fn"     in _app_state else "not loaded",
-        "telegram":  "ok" if "telegram_app" in _app_state else "not loaded",
-        "memory":    "ok" if _app_state.get("memory_ok") else "not loaded",
+        "embedder":       "ok" if "embedder"     in _app_state else "not loaded",
+        "retriever":      "ok" if "retriever"    in _app_state else "not loaded",
+        "solver":         "ok" if "solve_fn"     in _app_state else "not loaded",
+        "router":         "ok" if "route_fn"     in _app_state else "not loaded",
+        "telegram":       "ok" if "telegram_app" in _app_state else "not loaded",
+        "memory":         "ok" if _app_state.get("memory_ok") else "not loaded",
+        "model_theory":   GROQ_MODEL,
+        "model_explain":  GROQ_EXPLAIN_MODEL,
+        "model_vision":   GROQ_VISION_MODEL,
     }
     index_stats = {}
     try:
@@ -677,7 +807,9 @@ async def health():
             index_stats = retriever.manager.stats()
     except Exception:
         index_stats = {"error":"could not read stats"}
-    overall = "ok" if all(v=="ok" for v in components.values()) else "degraded"
+    # Add vision info
+    components["vision"] = f"{vision_provider_info().get('provider','none')} ({'ok' if vision_is_enabled() else 'disabled'})"
+    overall = "ok" if all(v in ("ok", "not loaded") or "ok" in v for v in components.values()) else "degraded"
     return HealthResponse(status=overall, components=components, index_stats=index_stats)
 
 @app.get("/api/memory/stats", tags=["Memory"])
@@ -781,7 +913,8 @@ async def generate_quiz(req: QuizRequest):
         f"berdasarkan nota berikut SAHAJA.\n\nNOTA:\n{context}\n\n"
         f'FORMAT JSON sahaja: {{"questions": [{{"soalan":"...","pilihan":["A...","B...","C...","D..."],"jawapan":"A","penjelasan":"..."}}]}}'
     )
-    raw = await call_llm(quiz_prompt, max_tokens=1200)
+    # Quiz generation uses 70b for better question quality
+    raw = await call_llm(quiz_prompt, max_tokens=1200, model=GROQ_MODEL)
     try:
         json_match = re.search(r'\{.*\}', raw, re.DOTALL)
         quiz_data  = json.loads(json_match.group()) if json_match else {"raw": raw}
