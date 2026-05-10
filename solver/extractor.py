@@ -445,7 +445,12 @@ def extract_empirical_masses(text: str) -> Optional[Dict[str, float]]:
     q = normalize_text(text)
     ql = q.lower()
 
-    if not any(k in ql for k in ["empirical", "formula empirik", "empirik", "%", "peratus"]):
+    if not any(k in ql for k in [
+        "empirical", "formula empirik", "empirik", "%", "peratus",
+        "tentukan formula",        # "tentukan formula empirik"
+        "determine formula",       # "determine the empirical formula"
+        "formula molekul",         # often paired with empirical
+    ]):
         return None
 
     # Method 1: explicit "El = X g" format
@@ -761,7 +766,12 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
         if moles:
             return {"task": "ph_from_poh", "oh_conc": moles[0]}
 
-    if "ph" in ql and any(k in ql for k in ["h+", "hcl", "hno3", "h2so4", "asid", "acid", "kepekatan h"]):
+    if "ph" in ql and any(k in ql for k in [
+        "h+", "hcl", "hno3", "h2so4", "asid", "acid",
+        "kepekatan h", "kepekatan ion h",
+        "ion hidrogen", "hydrogen ion",
+        "nilai ph",                # "apakah nilai pH"
+    ]):
         if h_plus:
             return {"task": "ph_from_h", "h_plus": h_plus}
         if moles:
@@ -771,8 +781,18 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     # PRIORITY 3 — SPECIFIC HIGH-CONFIDENCE TASKS
     # =====================================
 
-    # JMR
-    if any(k in ql for k in ["jmr", "jisim molekul relatif", "relative molecular mass", "jisim molar"]):
+    # JMR — expanded keywords for question-form detection
+    # e.g. "Apakah jisim relatif sebatian K4Fe(CN)6?" → jmr
+    # e.g. "What is the relative mass of this compound?" → jmr
+    if any(k in ql for k in [
+        "jmr", "jisim molekul relatif", "relative molecular mass",
+        "jisim molar", "molar mass",
+        "jisim relatif",          # "apakah jisim relatif sebatian"
+        "relative mass",           # "what is the relative mass"
+        "jisim formula relatif",   # less common but valid
+        "jisim molekul",           # short form
+        "relative molecular",      # partial match
+    ]):
         if formulas:
             return {"task": "jmr", "formula": formulas[0], "formulas": formulas}
 
@@ -781,9 +801,16 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
     if sub:
         return {"task": "subatomic", **sub}
 
-    # Relative atomic mass from isotopes
+    # Relative atomic mass from isotopes — expanded keywords
     isotope_data = extract_isotope_data(q)
-    if isotope_data and any(k in ql for k in ["ar", "jisim atom relatif", "relative atomic mass", "isotop", "isotope"]):
+    if isotope_data and any(k in ql for k in [
+        "ar", "jisim atom relatif", "relative atomic mass",
+        "isotop", "isotope",
+        "jisim atom",              # "apakah jisim atom relatif"
+        "atomic mass",             # "what is the atomic mass"
+        "jisim relatif atom",      # alternate phrasing
+        "kelimpahan", "abundance", # isotope abundance questions
+    ]):
         return {"task": "ar_from_abundance", **isotope_data}
 
     # Empirical formula — FIX BUG #6: uses new % parser, not formula extractor
@@ -793,7 +820,28 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
 
     # Oxidation number — FIX BUG #3: charge now correctly parsed
     ox = extract_oxidation_target(q, formulas)
-    if ox:
+    # Also detect question-form: "Tentukan nombor pengoksidaan..."
+    if not ox and any(k in ql for k in [
+        "nombor pengoksidaan", "oxidation number", "oxidation state",
+        "oxidation no", "no. pengoksidaan",
+        "tentukan nombor", "determine the oxidation",
+    ]) and formulas:
+        ox = {
+            "species": formulas[0],
+            "target_element": None,
+            "charge": None,
+        }
+        # Try to find target element from question
+        m = re.search(r'(?:nombor pengoksidaan|oxidation number of|oxidation state of)\s+([A-Z][a-z]?)', q)
+        if m:
+            ox["target_element"] = m.group(1)
+        else:
+            parsed = re.findall(r'[A-Z][a-z]?', formulas[0])
+            for sym in parsed:
+                if sym not in {"O", "H", "K", "Na", "Li", "Mg", "Ca", "Ba"}:
+                    ox["target_element"] = sym
+                    break
+    if ox and ox.get("target_element"):
         return {"task": "oxidation_number", **ox}
 
     # Redox change
@@ -808,7 +856,14 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
         "stoichiometry", "stoikiometri", "formed", "terbentuk", "hasilkan",
         "produce", "reacts", "reaction", "mendapan", "precipitate", "pemendapan",
         "terhasil", "dihasilkan", "bertindak balas", "bertindak", "sepenuhnya",
-        "completely", "dipanaskan", "dibakar", "terurai", "terbentuk"
+        "completely", "dipanaskan", "dibakar", "terurai",
+        "hitungkan jisim",         # "hitungkan jisim X yang terhasil"
+        "hitungkan isipadu",       # "hitungkan isipadu gas X"
+        "calculate the mass",      # English form
+        "calculate the volume",    # English form
+        "mass of", "volume of",    # partial match
+        "berapakah jisim",         # "berapakah jisim X?"
+        "berapakah isipadu",       # "berapakah isipadu X?"
     ]):
         eq_parts = equation.split('->')
         lhs_formulas = re.findall(r'[A-Z][A-Za-z0-9()]*', eq_parts[0]) if len(eq_parts) >= 1 else []
@@ -915,8 +970,14 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
                 "formulas": formulas,
             }
 
-    # Molarity from mass
-    if any(k in ql for k in ["kemolaran", "molarity"]) and masses and formulas and (volumes_dm3 or volumes_cm3):
+    # Molarity from mass — expanded keywords
+    if any(k in ql for k in [
+        "kemolaran", "molarity",
+        "hitungkan kemolaran", "calculate molarity",
+        "tentukan kemolaran", "determine molarity",
+        "apakah kemolaran", "what is the molarity",
+        "kepekatan molar", "molar concentration",
+    ]) and masses and formulas and (volumes_dm3 or volumes_cm3):
         data: Dict[str, Any] = {
             "task": "molarity_from_mass",
             "mass_g": masses[0],
@@ -992,7 +1053,13 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
                 "masses": masses,
             }
 
-    if mole_words and masses and formulas:
+    # Extended mol detection — question-form e.g. "berapa mol dalam 4g NaOH?"
+    mol_question_words = any(k in ql for k in [
+        "berapa mol", "how many mol", "hitungkan mol",
+        "calculate mol", "bilangan mol", "number of mol",
+        "tentukan mol", "determine mol",
+    ])
+    if (mole_words or mol_question_words) and masses and formulas:
         return {
             "task": "moles_from_mass",
             "mass_g": masses[0],
