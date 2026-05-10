@@ -82,6 +82,9 @@ def preprocess_vision_question(text: str) -> str:
     soalan = soalan_match.group(1).strip() if soalan_match else t
     data = data_match.group(1).strip() if data_match else ""
 
+    # Strip square brackets from DATA (they interfere with formula extraction)
+    data = re.sub(r'^\[|\]$', '', data).strip()
+
     # Build clean question: SOALAN + DATA (strip PILIHAN entirely)
     clean = soalan
     if data:
@@ -232,18 +235,31 @@ def extract_species_with_charge(text: str, formulas: List[str]) -> Optional[Dict
 def extract_valid_formulas(text: str) -> List[str]:
     t = normalize_text(text)
 
-    candidates = re.findall(r"\b[A-Z][A-Za-z0-9()·.]*[A-Za-z0-9)]\b", t)
-
     valid: List[str] = []
     seen = set()
+    seen_spans = set()
 
-    for cand in candidates:
-        # FIX BUG #6: skip BM stopwords
-        if cand in BM_STOPWORDS:
+    # Pattern 1: Complex formulas with brackets + optional hydration
+    # e.g. K4Fe(CN)6.3H2O, CuSO4.5H2O, Fe2(SO4)3
+    for m in re.finditer(
+        r'[A-Z][A-Za-z0-9]*(?:\([A-Za-z0-9]+\)[0-9]*)+(?:\.[0-9]*[A-Z][A-Za-z0-9]*(?:\([A-Za-z0-9]+\)[0-9]*)*)*',
+        t
+    ):
+        cand = m.group()
+        if cand not in seen and cand not in BM_STOPWORDS:
+            valid.append(cand)
+            seen.add(cand)
+            seen_spans.add((m.start(), m.end()))
+
+    # Pattern 2: Simple formulas (no brackets)
+    for m in re.finditer(r'\b[A-Z][A-Za-z0-9()·.]*[A-Za-z0-9)]\b', t):
+        # Skip if already covered by complex pattern
+        overlap = any(m.start() >= s[0] and m.end() <= s[1] for s in seen_spans)
+        if overlap:
             continue
-        if cand in seen:
+        cand = m.group()
+        if cand in BM_STOPWORDS or cand in seen:
             continue
-        # Extra guard: skip single-letter uppercase that are BM/EN words
         if len(cand) == 1 and cand not in {"H", "N", "O", "S", "C", "P", "K", "I", "U", "V", "W", "Y"}:
             continue
         if is_valid_formula(cand):

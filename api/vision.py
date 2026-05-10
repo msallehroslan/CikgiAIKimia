@@ -68,7 +68,7 @@ LANGKAH 1 — BACA gambar dan extract semua teks
 LANGKAH 2 — OUTPUT soalan dalam format bersih siap untuk dijawab
 
 FORMAT OUTPUT (ikut tepat-tepat):
-SOALAN: [tulis soalan lengkap dengan data]
+SOALAN: [tulis soalan lengkap TERMASUK formula kimia dalam bahagian ini]
 PILIHAN: A.[teks] B.[teks] C.[teks] D.[teks]  ← hanya jika MCQ
 DATA: [Jisim atom relatif dan data lain jika ada]
 
@@ -76,17 +76,18 @@ PERATURAN formula kimia (WAJIB):
 - Format biasa SAHAJA: H2O, NaOH, K4Fe(CN)6.3H2O, SO4 2-, MnO4-
 - JANGAN LaTeX: tiada $\\rm K_4Fe$ atau _4 atau ^2-
 - JANGAN unicode: tiada H₂O, SO₄²⁻ — guna H2O, SO4 2-
+- Formula MESTI dalam bahagian SOALAN, bukan di luar atau dalam DATA
 
 PERATURAN kotak/rajah:
-- Formula dalam KOTAK → MESTI baca dan tulis dalam OUTPUT
-- Nama kimia ada tapi formula tiada → DERIVE formula dari nama
-  Contoh: "kalium heksasianoferat(III) terhidrat" → K4Fe(CN)6.3H2O
-  Contoh: "kuprum(II) sulfat pentahidrat" → CuSO4.5H2O
+- Formula dalam KOTAK → MESTI tulis dalam SOALAN bukan selepasnya
+- Nama kimia ada tapi formula tiada → DERIVE formula dan tulis dalam SOALAN
+  Contoh: "kalium heksasianoferat(III) terhidrat" → tambah K4Fe(CN)6.3H2O dalam SOALAN
+  Contoh: "kuprum(II) sulfat pentahidrat" → tambah CuSO4.5H2O dalam SOALAN
 - [RAJAH] hanya untuk gambar/struktur yang benar-benar tidak boleh jadi teks
 
 PERATURAN MCQ:
 - Sertakan soalan DAN semua pilihan A, B, C, D
-- Sertakan semua data yang diberi
+- Sertakan semua data yang diberi dalam bahagian DATA
 
 Balas dengan FORMAT OUTPUT sahaja. Tiada penjelasan lain."""
 
@@ -97,7 +98,7 @@ STEP 1 — READ image and extract all text
 STEP 2 — OUTPUT question in clean format ready to be answered
 
 OUTPUT FORMAT (follow exactly):
-QUESTION: [full question with data]
+QUESTION: [full question text INCLUDING chemical formula in this section]
 OPTIONS: A.[text] B.[text] C.[text] D.[text]  ← only if MCQ
 DATA: [Relative atomic mass and other data if present]
 
@@ -105,17 +106,18 @@ FORMULA RULES (MANDATORY):
 - Plain text ONLY: H2O, NaOH, K4Fe(CN)6.3H2O, SO4 2-, MnO4-
 - NO LaTeX: no $\\rm K_4Fe$ or _4 or ^2-
 - NO unicode: no H₂O, SO₄²⁻ — use H2O, SO4 2-
+- Formula MUST be in QUESTION section, not outside or in DATA
 
 BOX/DIAGRAM RULES:
-- Formula inside a BOX → MUST read and write in OUTPUT
-- Chemical name present but formula missing → DERIVE formula from name
-  Example: "potassium hexacyanoferrate(III) trihydrate" → K4Fe(CN)6.3H2O
-  Example: "copper(II) sulphate pentahydrate" → CuSO4.5H2O
+- Formula inside a BOX → write it in QUESTION section not outside
+- Chemical name present but formula missing → DERIVE formula and write in QUESTION
+  Example: "potassium hexacyanoferrate(III) trihydrate" → add K4Fe(CN)6.3H2O in QUESTION
+  Example: "copper(II) sulphate pentahydrate" → add CuSO4.5H2O in QUESTION
 - [DIAGRAM] only for images/structures that truly cannot be text
 
 MCQ RULES:
 - Include question AND all options A, B, C, D
-- Include all given data
+- Include all given data in DATA section
 
 Reply with OUTPUT FORMAT only. No extra explanation."""
 
