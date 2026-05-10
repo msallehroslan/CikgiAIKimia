@@ -377,7 +377,12 @@ async def setup_telegram(app_instance):
         async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """
             Handle photo messages from students.
-            Flow: Photo → vision.py → extract text → call_api → answer
+
+            FLOW (4 steps):
+            1. Download photo from Telegram
+            2. Vision AI  → extract raw text from image
+            3. LLM 8b     → interpret raw text → clean question
+            4. Solver/RAG → deterministic answer + LLM explain
             """
             user_id = update.effective_user.id
 
@@ -399,27 +404,24 @@ async def setup_telegram(app_instance):
 
             try:
                 # ── Step 1: Download photo from Telegram ──────────────────
-                # Get highest resolution photo
                 photo = update.message.photo[-1]
                 photo_file = await context.bot.get_file(photo.file_id)
 
-                # Download as bytes
                 import io
                 photo_bytes_io = io.BytesIO()
                 await photo_file.download_to_memory(photo_bytes_io)
                 image_bytes = photo_bytes_io.getvalue()
-
                 logger.info(f"Photo received: {len(image_bytes)} bytes from user {user_id}")
 
-                # ── Step 2: Detect language from caption if any ───────────
+                # ── Step 2: Detect language ───────────────────────────────
                 caption = update.message.caption or ""
                 lang = detect_language(caption) if caption else "BM"
 
-                # ── Step 3: Extract question text from image ──────────────
+                # ── Step 3: Vision AI — extract raw text from image ───────
                 await update.message.chat.send_action(ChatAction.TYPING)
-                extracted_text = await extract_question_from_image(image_bytes, lang=lang)
+                raw_text = await extract_question_from_image(image_bytes, lang=lang)
 
-                if not extracted_text or len(extracted_text.strip()) < 5:
+                if not raw_text or len(raw_text.strip()) < 5:
                     await update.message.reply_text(
                         "⚠️ _Tidak dapat membaca teks dalam gambar._\n\n"
                         "Cuba:\n"
@@ -430,15 +432,30 @@ async def setup_telegram(app_instance):
                     )
                     return
 
-                # ── Step 4: Show extracted text to user ───────────────────
-                preview = extracted_text[:200] + "..." if len(extracted_text) > 200 else extracted_text
+                # ── Step 4: LLM Interpret — clean & structure question ────
+                # Uses 8b model (fast, 14.4K RPD)
+                # Converts messy OCR output → clean solver-ready question
+                # e.g. LaTeX remnants, MCQ options, table data → clean text
+                await update.message.chat.send_action(ChatAction.TYPING)
+                groq_key = os.environ.get("GROQ_API_KEY", "")
+
+                from vision import interpret_question
+                clean_question = await interpret_question(
+                    raw_text=raw_text,
+                    lang=lang,
+                    groq_api_key=groq_key,
+                    explain_model=GROQ_EXPLAIN_MODEL,
+                )
+
+                # Show extracted + interpreted preview to user
+                preview = clean_question[:250] + "..." if len(clean_question) > 250 else clean_question
                 await update.message.reply_text(
-                    f"📝 *Soalan yang dibaca:*\n\n`{preview}`\n\n"
+                    f"📝 *Soalan yang dikesan:*\n\n`{preview}`\n\n"
                     f"_Sedang mengira jawapan..._",
                     parse_mode=ParseMode.MARKDOWN,
                 )
 
-                # ── Step 5: Send to normal solver/RAG pipeline ───────────
+                # ── Step 5: Solver/RAG pipeline (same as text questions) ──
                 await update.message.chat.send_action(ChatAction.TYPING)
 
                 answer      = None
@@ -448,39 +465,37 @@ async def setup_telegram(app_instance):
                 from_cache  = False
 
                 try:
-                    result      = await call_api(extracted_text, session_id=f"tg_{user_id}")
+                    result      = await call_api(clean_question, session_id=f"tg_{user_id}")
                     answer      = result.get("answer")
                     answer_type = result.get("answer_type", "fallback")
                     sources     = result.get("sources", [])
                     ms          = result.get("processing_time_ms", 0)
                     from_cache  = result.get("from_cache", False)
                 except Exception as api_err:
-                    logger.warning(f"call_api failed for vision question: {api_err}")
+                    logger.warning(f"call_api failed for vision: {api_err}")
 
-                # ── Step 6: Fallback LLM jika pipeline gagal ─────────────
-                # Handles cases like: LaTeX remnants, complex MCQ, diagram questions
-                # Uses 70b model — better for unseen question types
+                # ── Step 6: Safety fallback — jika solver masih fail ──────
+                # Rare case: question type not supported yet (e.g. voltaic cell)
+                # LLM answers directly with SPM format
                 if not answer or answer_type == "fallback":
                     try:
-                        groq_key = os.environ.get("GROQ_API_KEY", "")
                         if groq_key:
                             from groq import AsyncGroq
                             client = AsyncGroq(api_key=groq_key)
                             fallback_prompt = f"""Kamu adalah Cikgu AI Kimia, tutor kimia SPM Malaysia.
-Jawab soalan kimia SPM berikut dengan tepat dan lengkap dalam Bahasa Malaysia.
+Jawab soalan kimia SPM berikut dengan tepat dalam Bahasa Malaysia.
 
-Jika soalan PENGIRAAN: guna format SPM:
-Diberi: [nilai yang diberi]
-Formula: [formula yang digunakan]
-Pengiraan: [langkah pengiraan]
-Jawapan: [jawapan akhir dengan unit]
+Jika PENGIRAAN: guna format SPM:
+Diberi: [nilai]
+Formula: [formula]
+Pengiraan: [langkah]
+Jawapan: [jawapan + unit]
 
-Jika soalan MCQ: nyatakan jawapan (A/B/C/D) dan penjelasan ringkas 2-3 ayat.
-Jika soalan TEORI: jawab dalam 3-5 ayat ringkas mengikut sukatan SPM.
-Jika ada [RAJAH] dalam soalan: jawab berdasarkan konteks soalan sahaja.
+Jika MCQ: nyatakan jawapan (A/B/C/D) dan penjelasan 2-3 ayat.
+Jika TEORI: jawab 3-5 ayat mengikut sukatan SPM.
 
-SOALAN DARI GAMBAR:
-{extracted_text}"""
+SOALAN:
+{clean_question}"""
                             resp = await client.chat.completions.create(
                                 model=GROQ_MODEL,
                                 messages=[{"role": "user", "content": fallback_prompt}],
@@ -489,18 +504,18 @@ SOALAN DARI GAMBAR:
                             )
                             answer      = resp.choices[0].message.content.strip()
                             answer_type = "theory"
-                            logger.info("Vision fallback LLM answered successfully")
+                            logger.info("Vision safety fallback LLM used")
                     except Exception as llm_err:
                         logger.error(f"Vision fallback LLM failed: {llm_err}")
 
-                # ── Step 7: Format and send ───────────────────────────────
+                # ── Step 7: Format and send answer ────────────────────────
                 if not answer:
                     await update.message.reply_text(
-                        "⚠️ _Tidak dapat menjawab soalan dalam gambar ini._\n\n"
+                        "⚠️ _Tidak dapat menjawab soalan ini._\n\n"
                         "Cuba:\n"
                         "• Taip soalan dalam teks terus\n"
-                        "• Pastikan gambar tidak terlalu kecil\n"
-                        "• Satu soalan sahaja dalam satu gambar",
+                        "• Satu soalan sahaja dalam satu gambar\n"
+                        "• Pastikan soalan ada nilai/data yang lengkap",
                         parse_mode=ParseMode.MARKDOWN,
                     )
                     return

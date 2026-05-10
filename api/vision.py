@@ -69,15 +69,16 @@ PERATURAN WAJIB untuk formula kimia:
 - Formula dengan titik air kristal: tulis K4Fe(CN)6.3H2O
 - Ion berkas: tulis SO4 2-, MnO4-, Cr2O7 2-
 
+PERATURAN WAJIB untuk kotak dan rajah:
+- Jika ada formula atau teks dalam KOTAK (box) — MESTI baca dan extract kandungannya
+- Jika ada formula dalam rajah berlabel "Rajah 1" atau "Diagram 1" — MESTI extract formula tersebut
+- Jangan tulis [RAJAH] jika kotak mengandungi formula kimia — baca dan tulis formulanya
+- Hanya tulis [RAJAH] jika kotak mengandungi gambar/struktur yang benar-benar tidak boleh dibaca sebagai teks
+
 PERATURAN untuk soalan MCQ:
 - Sertakan soalan DAN semua pilihan jawapan (A, B, C, D)
 - Sertakan data yang diberi (Jisim atom relatif, dll)
 - Jika ada jadual, tulis dalam format teks biasa
-
-PERATURAN untuk rajah/gambar:
-- Jika ada rajah yang tidak boleh dibaca dalam teks, tulis [RAJAH]
-- Jika ada graf, tulis [GRAF] dan huraikan paksi jika boleh dibaca
-- Jika ada formula struktur kimia organik, huraikan dalam teks
 
 Balas dengan teks soalan SAHAJA. Tiada penjelasan. Tiada markdown header."""
 
@@ -92,15 +93,16 @@ CRITICAL RULES for chemical formulas:
 - Water of crystallisation: write K4Fe(CN)6.3H2O
 - Ionic charges: write SO4 2-, MnO4-, Cr2O7 2-
 
+CRITICAL RULES for boxes and diagrams:
+- If a formula or text is inside a BOX — you MUST read and extract its content
+- If a formula is in a diagram labelled "Diagram 1" or "Rajah 1" — MUST extract the formula
+- Do NOT write [DIAGRAM] if the box contains a chemical formula — read and write it
+- Only write [DIAGRAM] if the box contains an actual image/structure that truly cannot be read as text
+
 RULES for MCQ questions:
 - Include question AND all answer options (A, B, C, D)
 - Include given data (Relative atomic mass, etc.)
 - If there is a table, write it in plain text
-
-RULES for diagrams:
-- If diagram cannot be read as text, write [DIAGRAM]
-- If graph, write [GRAPH] and describe axes if readable
-- If organic structural formula, describe it in text
 
 Reply with question text ONLY. No explanation. No markdown headers."""
 
@@ -336,6 +338,122 @@ def clean_extracted_text(text: str) -> str:
     text = _re.sub(r' {2,}', ' ', text)
 
     return text.strip()
+
+
+async def interpret_question(
+    raw_text: str,
+    lang: str = "BM",
+    groq_api_key: str = "",
+    explain_model: str = "llama-3.1-8b-instant",
+) -> str:
+    """
+    Step 2 of vision pipeline — LLM interpret extracted text.
+
+    Takes messy OCR/vision output and converts to clean,
+    solver-ready question text.
+
+    Examples:
+      IN:  "## Soalan Kimia SPM\n5\n$\\rm K_4Fe(CN)_6.3H_2O$\nApakah jisim relatif?"
+      OUT: "Apakah jisim relatif bagi K4Fe(CN)6.3H2O? [H=1, C=12, O=16, K=39, Fe=56, N=14]"
+
+      IN:  "A 141\nB 256\nC 389\nD 422"  (MCQ with no question)
+      OUT: "Hitungkan JMR bagi K4Fe(CN)6.3H2O [H=1,C=12,O=16,K=39,Fe=56,N=14]"
+
+    Args:
+        raw_text     : cleaned extracted text from vision
+        lang         : "BM" or "EN"
+        groq_api_key : Groq API key
+        explain_model: model to use (8b-instant, fast and sufficient)
+
+    Returns:
+        Clean question text ready for solver/RAG pipeline
+        Falls back to raw_text if LLM fails
+    """
+    if not groq_api_key or not raw_text:
+        return raw_text
+
+    if lang == "BM":
+        prompt = f"""Kamu adalah pembantu kimia SPM. Tugas kamu adalah menginterpret teks yang diextract dari gambar soalan kimia SPM.
+
+TEKS DARI GAMBAR:
+{raw_text}
+
+TUGASAN:
+1. Kenal pasti soalan kimia UTAMA yang perlu dijawab
+2. Jika soalan MCQ — tulis soalan dan pilihan jawapan (A, B, C, D) dengan jelas
+3. Jika ada data (Jisim atom relatif, kemolaran, dll) — sertakan dalam soalan
+4. Jika ada formula kimia — pastikan dalam format biasa (H2O, NaOH, K4Fe(CN)6)
+5. Buang teks tidak relevan (nombor halaman, header, footer, teks berulang)
+
+PENTING — DERIVE FORMULA DARI NAMA KIMIA:
+Jika nama kimia IUPAC ada dalam soalan tapi formula tidak kelihatan
+(mungkin dalam kotak/rajah yang tidak dapat dibaca), DERIVE formula dari nama:
+- "kalium heksasianoferat(III) terhidrat" → K4Fe(CN)6.3H2O
+- "kuprum(II) sulfat pentahidrat" → CuSO4.5H2O
+- "natrium tiosulfat" → Na2S2O3
+- "ferum(III) oksida" → Fe2O3
+- Gunakan pengetahuan kimia untuk derive formula lain yang serupa
+
+PENTING — RAJAH/KOTAK:
+Jika ada sebutan "Rajah X" atau "Diagram X" yang mengandungi formula/struktur
+tapi tidak dapat dibaca dalam teks — gunakan nama kimia dalam soalan untuk
+derive formula tersebut dan sertakan dalam output.
+
+OUTPUT: Tulis semula soalan dengan LENGKAP dan JELAS.
+Sertakan formula yang betul dan semua data yang diperlukan.
+JANGAN jawab soalan — hanya tulis semula soalan dengan jelas."""
+
+    else:
+        prompt = f"""You are an SPM chemistry assistant. Interpret text extracted from an SPM chemistry question image.
+
+EXTRACTED TEXT:
+{raw_text}
+
+TASK:
+1. Identify the MAIN chemistry question to be answered
+2. If MCQ — write the question and all answer options (A, B, C, D) clearly
+3. If there is data (Relative atomic mass, molarity, etc.) — include it
+4. If chemical formulas present — ensure plain text format (H2O, NaOH, K4Fe(CN)6)
+5. Remove irrelevant text (page numbers, headers, footers, repeated text)
+
+IMPORTANT — DERIVE FORMULA FROM IUPAC NAME:
+If a chemical IUPAC name exists but formula is missing
+(possibly in a box/diagram that was not extracted), DERIVE the formula:
+- "potassium hexacyanoferrate(III) trihydrate" → K4Fe(CN)6.3H2O
+- "copper(II) sulphate pentahydrate" → CuSO4.5H2O
+- "sodium thiosulphate" → Na2S2O3
+- "iron(III) oxide" → Fe2O3
+- Use chemistry knowledge to derive other similar formulas
+
+IMPORTANT — DIAGRAMS/BOXES:
+If "Diagram X" or "Rajah X" contains a formula/structure
+that was not extracted — use the chemical name to derive the formula
+and include it in your output.
+
+OUTPUT: Rewrite the question COMPLETELY and CLEARLY.
+Include the correct formula and all required data.
+DO NOT answer — only rewrite the question clearly."""
+
+    try:
+        from groq import AsyncGroq
+        client = AsyncGroq(api_key=groq_api_key)
+        resp = await client.chat.completions.create(
+            model=explain_model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=400,
+            temperature=0.1,
+        )
+        interpreted = resp.choices[0].message.content.strip()
+
+        # Apply same cleaning to interpreted text
+        interpreted = clean_extracted_text(interpreted)
+
+        logger.info(f"LLM interpreted: {len(raw_text)} → {len(interpreted)} chars")
+        return interpreted if interpreted else raw_text
+
+    except Exception as e:
+        logger.warning(f"interpret_question failed: {e} — using raw text")
+        return raw_text
 
 
 def vision_is_enabled() -> bool:
