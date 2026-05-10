@@ -2,7 +2,7 @@
 
 > Production-ready AI tutor for Malaysian SPM Chemistry students
 > Built with FastAPI + FAISS + Groq LLM + Telegram Bot + Firebase Smart Memory
-> Now with Photo/Vision support 📷
+> Now with Universal Solver + Multi-State SPM Coverage 📚
 
 ---
 
@@ -13,14 +13,13 @@
 | API (FastAPI) | https://cikgiaikimia.onrender.com |
 | API Docs | https://cikgiaikimia.onrender.com/docs |
 | Health Check | https://cikgiaikimia.onrender.com/api/health |
-| Memory Stats | https://cikgiaikimia.onrender.com/api/memory/stats |
 | Telegram Bot | @TicerHawaAIBot |
 | GitHub | https://github.com/msallehroslan/CikgiAIKimia |
 | Firebase | https://console.firebase.google.com/u/1/project/cikgu-kimia-66b7b/firestore |
 
 ---
 
-## ✅ FULLY WORKING FEATURES
+## ✅ FULLY WORKING FEATURES (v3.2.0 deployed)
 
 ### Infrastructure
 - [x] FastAPI backend deployed on Render.com (Singapore)
@@ -32,90 +31,95 @@
 - [x] Render auto-deploy on git push
 - [x] Telegram webhook inside FastAPI (no separate worker)
 
-### Solvers (Deterministic Python — v3.2.0)
+### Solvers (Deterministic Python — v3.2.0 deployed)
 - [x] Mol calculations (moles_from_mass, moles_from_volume, moles_multi)
-- [x] pH / pOH calculations (termasuk dari [OH-] concentration)
-- [x] Titration — find molarity dan find volume (nisbah 1:1 dan 1:2)
+- [x] pH / pOH calculations
+- [x] Titration — find molarity dan find volume (nisbah 1:1)
 - [x] Thermochemistry — entalpi peneutralan, pemelarutan, pembakaran
-- [x] Entalpi endotermik (suhu turun = DeltaH positif)
-- [x] Stoichiometry mass->mass dan mass->volume (gas RTP/STP)
-- [x] Stoichiometry volume->mass (gas diberi, jisim ditanya) — NEW v3.2.0
-- [x] Voltaic cell — E0cell = E0katod - E0anod — NEW v3.2.0
-- [x] Molarity from delta H — cari kemolaran dari ΔH dan ΔT — NEW v3.2.0
+- [x] Stoichiometry mass→mass dan mass→volume
+- [x] Voltaic cell — E0cell = E0katod - E0anod
+- [x] Molarity from delta H
 - [x] Concentration g/dm3, Dilution (M1V1=M2V2)
-- [x] Empirical formula (dari % komposisi atau jisim — BM/EN)
+- [x] Empirical formula
 - [x] Relative atomic mass dari isotop
-- [x] Atomic structure (proton, neutron, elektron)
-- [x] Oxidation number (ion berkas SO4 2-, NO3-, Cr2O7 2-)
-- [x] Rate of reaction (purata dan dari dua titik graf)
-- [x] JMR / Molar mass (formula mudah, kompleks, air kristal K4Fe(CN)6.3H2O)
-- [x] Mass from molarity (jisim untuk buat larutan)
-- [x] Jumlah mol campuran gas (multi-formula)
+- [x] Atomic structure
+- [x] Oxidation number
+- [x] Rate of reaction
+- [x] JMR / Molar mass
+- [x] Mass from molarity
 
 ### Photo / Vision Support (v3.2.0)
 - [x] Pelajar hantar gambar soalan ke Telegram — bot jawab
-- [x] Scout buat extract + interpret dalam SATU call (optimised)
-- [x] Auto-derive formula dari nama IUPAC bila formula tidak terbaca
-  - "kalium heksasianoferat(III) terhidrat" → K4Fe(CN)6.3H2O
-  - "kuprum(II) sulfat pentahidrat" → CuSO4.5H2O
-- [x] Formula MESTI dalam bahagian SOALAN (arahan eksplisit dalam prompt)
-- [x] preprocess_vision_question() — strip MCQ options, parse SOALAN/PILIHAN/DATA
-- [x] extract_valid_formulas() — handle complex formula K4Fe(CN)6.3H2O, Fe2(SO4)3
-- [x] Clean extracted text — strip LaTeX, unicode subscript, arrows
-- [x] Support MCQ — extract soalan + semua pilihan A/B/C/D
-- [x] Fallback LLM (70b) untuk soalan yang solver belum support
-- [x] Multi-provider: Groq Scout (default) / Gemini Flash / Tesseract (local)
-- [x] Switch provider tanpa tukar code — set VISION_PROVIDER env var
-
-### LLM Architecture (v3.2.0 — 3-Model Disciplined)
-- [x] LLM HANYA untuk: (1) explain solver output, (2) teori dengan RAG context
-- [x] LLM TIDAK BOLEH jawab pengiraan tanpa solver
-- [x] Soalan luar konteks → mesej fallback jelas (no hallucination)
-- [x] 3 model berbeza — RPD pool berasingan (~16K combined RPD/day)
-
-### Extractor (v3.2.0 — Vision-Ready)
-- [x] preprocess_vision_question() — handle Scout structured output
-- [x] _clean_mcq_options() — strip A.141 B.256 C.389 D.422
-- [x] extract_valid_formulas() — Pattern 1 (complex) + Pattern 2 (simple)
-- [x] BM Stopwords — "Sebatian" tidak parse sebagai "Se"
-- [x] Equation extraction v2 — trim LHS/RHS betul semua format
-- [x] Strip [Ar=X] notation sebelum parse equation
-- [x] Expanded keywords semua task — handle soalan bentuk ayat dari gambar:
-  - JMR: "jisim relatif", "relative mass"
-  - Mol: "berapa mol", "bilangan mol"
-  - pH: "ion hidrogen", "nilai ph"
-  - Molarity: "hitungkan kemolaran", "apakah kemolaran"
-  - Stoich: "hitungkan jisim", "berapakah isipadu", "mass of"
-  - Empirical: "tentukan formula", "formula molekul"
-  - Oxidation: "tentukan nombor", "determine the oxidation"
-  - Ar isotop: "jisim atom", "kelimpahan", "abundance"
-  - Voltaic: "keupayaan elektrod", "voltan sel", "e0"
-  - Molarity from dH: "kemolaran" + "delta h" + thermochemistry
-
-### Telegram Bot
-- [x] /start — welcome + inline keyboard
-- [x] /help — all commands
-- [x] /quiz [topik] — generate MCQ quiz
-- [x] /solve [soalan] — calculation only
-- [x] /clear — clear session + memory
-- [x] /stats — show cache statistics
-- [x] Hantar gambar terus — bot jawab soalan dari gambar
+- [x] Scout extract + interpret dalam SATU call
+- [x] Auto-derive formula dari nama IUPAC
+- [x] Support MCQ + struktur organik
 
 ---
 
-## 📊 SPM TRIAL PAPER CAPABILITY
-### Kertas Percubaan SPM 2024 — Johor Batu Pahat (40 soalan)
+## 🔧 PENDING FIXES — v3.4.0 (BELUM PUSH)
 
-| Kategori | Bilangan | Peratusan |
+### Fail: solver/solver_engine.py
+**6 Bug Kritikal yang dah difix (dalam solver_engine_fixed.py):**
+
+| # | Bug | Kesan | Fix |
+|---|---|---|---|
+| 1 | Concentration/dilution crash | Ralat bila tanya kepekatan | Handle exception + fix routing |
+| 2 | Thermochem J→kJ salah | ΔH=-2.86 bukan -53.76 | Divide by 1000 betul |
+| 3 | Stoich crash bila input mol | Crash untuk soalan "0.5 mol KI →" | Accept mol terus |
+| 4 | Kepekatan molar tidak dikira | Dapat g/dm³ sahaja, bukan mol/dm³ | Kira kedua-dua |
+| 5 | Titration nisbah diabaikan | H₂SO₄+2NaOH dapat 40cm³ bukan 80cm³ | Ambil kira stoich ratio |
+| 6 | MOLFROMDH solver tidak lengkap | Hanya kira Q, tidak sambung ke kemolaran | Lengkapkan 3 langkah |
+
+### Fail: solver/solver_engine.py (universal_spm_solver.py)
+**Solver Baru — cover semua pattern SPM pelbagai negeri:**
+
+| Solver Baru | Pattern | Contoh (Negeri) |
 |---|---|---|
-| Boleh jawab teks sahaja | 22 | 55% |
-| Boleh jawab dengan gambar | +15 est | ~92% total |
-| Sangat susah (graf data tepat) | ~3 | ~8% |
+| stoich_from_molarity | Kemolaran → jisim produk | Terengganu Q38 |
+| thermochem_reverse | Beri Q, cari ΔT | Terengganu Q34 |
+| stoich_vol_to_vol | Gas → gas (nisbah) | Terengganu Q37 |
+| ph_from_OH | OH⁻ → pH | Terengganu Q25 |
+| stoich_mass_to_vol | Jisim → isipadu gas | Terengganu Q33 |
 
-### Limitations Yang Masih Ada
-1. Graf yang perlu baca nilai tepat — Q15 (kaedah tangen), Q33 (nilai R vs S)
-2. Soalan KBAT multi-step seperti Q40 (kenal garam X dulu, kemudian kira PbO)
-3. Diagram susunan elektron — perlu vision interpret dengan tepat
+### Fail: api/vision.py
+**Vision Prompt dikemas kini (dalam vision_prompt_johor2021.py):**
+- Format output berstruktur: JENIS, SOALAN, DATA_NOMBOR, FORMULA_KIMIA, PERSAMAAN_KIMIA, JENIS_PENGIRAAN
+- Type detection automatik → route ke solver betul
+- Cover semua 10 jenis soalan SPM (graf, jadual, struktur, neraca, dll)
+
+---
+
+## 📊 SPM MULTI-STATE COVERAGE (selepas v3.4.0)
+
+| Negeri | Tahun | Kertas | Status |
+|---|---|---|---|
+| Johor | 2021 | K1 + K2 + Skema | ✅ Dianalisis |
+| Terengganu | 2021 | K1 | ✅ Dianalisis |
+| Selangor | 2024 | K1 (scanned) | ⏳ Pending OCR |
+| Kedah/Pahang/Perak | - | - | 🔄 Pending upload |
+
+### Soalan Pengiraan — Status Coverage
+
+| Jenis Soalan | Johor | Terengganu | Status |
+|---|---|---|---|
+| Stoich mass→mass | ✅ | ✅ | Selesai |
+| Stoich mass→vol | ✅ | ✅ | Selesai |
+| Stoich vol→mass | ✅ | - | Selesai |
+| Stoich vol→vol | - | ✅ | Selesai |
+| Stoich dari kemolaran | - | ✅ | Selesai |
+| Thermochem forward (ΔH) | ✅ | ✅ | Selesai |
+| Thermochem reverse (ΔT) | - | ✅ | Selesai |
+| pH dari H⁺ | ✅ | ✅ | Selesai |
+| pH dari OH⁻ | ✅ | ✅ | Selesai |
+| Titration 1:1 | ✅ | - | Selesai |
+| Titration 1:2 | ✅ | ✅ | Selesai |
+| Voltaic cell | ✅ | - | Selesai |
+| JMR/Molar mass | ✅ | ✅ | Selesai |
+| Formula empirik | ✅ | - | Selesai |
+| Kadar tindak balas | ✅ | - | Selesai |
+| Jisim atom relatif (isotop) | ✅ | - | Selesai |
+| % komposisi (hidrat) | ✅ | - | Selesai |
+| Molarity dari ΔH | ✅ | - | Selesai |
 
 ---
 
@@ -127,6 +131,7 @@ CikgiAIKimia/
 │   ├── main.py              ← FastAPI + Telegram webhook (v3.2.0)
 │   ├── memory.py            ← Smart memory (shared cache + personal)
 │   └── vision.py            ← Multi-provider vision (Groq/Gemini/Tesseract)
+│                               ⚠️ PENDING: Update VISION_SYSTEM_PROMPT
 ├── rag/
 │   ├── embedder.py          ← fastembed ONNX
 │   ├── retriever.py         ← FAISS retriever
@@ -134,9 +139,13 @@ CikgiAIKimia/
 │   ├── indexer.py           ← FAISS index manager
 │   └── metadata_tagger.py   ← chunk metadata tagger
 ├── solver/
-│   ├── solver_engine.py     ← deterministic chemistry solver (v3.2.0)
-│   ├── extractor.py         ← question parser (v3.2.0 vision-ready)
+│   ├── solver_engine.py     ← deterministic chemistry solver
+│   │                           ⚠️ PENDING: Merge solver_engine_fixed.py
+│   │                           ⚠️ PENDING: Merge universal_spm_solver.py
+│   ├── extractor.py         ← question parser
+│   │                           ⚠️ PENDING: Add vision output extractor
 │   ├── router.py            ← task router
+│   │                           ⚠️ PENDING: Add new solver type mappings
 │   ├── formula_parser.py    ← chemical formula parser
 │   ├── equation_parser.py   ← equation parser
 │   └── units.py             ← unit conversions
@@ -162,8 +171,7 @@ CikgiAIKimia/
 | GROQ_MODEL | llama-3.3-70b-versatile |
 | GROQ_EXPLAIN_MODEL | llama-3.1-8b-instant |
 | GROQ_VISION_MODEL | meta-llama/llama-4-scout-17b-16e-instruct |
-| VISION_PROVIDER | groq (groq/gemini/tesseract/none) |
-| GEMINI_API_KEY | your_gemini_key (hanya jika VISION_PROVIDER=gemini) |
+| VISION_PROVIDER | groq |
 | TELEGRAM_BOT_TOKEN | your_bot_token |
 | API_BASE_URL | https://cikgiaikimia.onrender.com |
 | FAISS_INDEX_DIR | ./faiss_indexes |
@@ -190,43 +198,39 @@ numpy==1.26.4
 
 ---
 
-## 🧠 ANSWER PIPELINE (v3.2.0)
+## 🧠 ANSWER PIPELINE (v3.4.0 — target)
 
 ```
 TEKS masuk              GAMBAR masuk
      |                       |
 Detect BM/EN         Groq Scout (1 call)
-     |               extract+interpret
-Firebase cache       formula MESTI dalam SOALAN
-HIT -> Return            |
-     |               preprocess_vision_question()
-     |               strip MCQ options
-     |               parse SOALAN/DATA
-Extractor <-----------------/
-extract_valid_formulas()
-(Pattern 1: K4Fe(CN)6.3H2O)
-(Pattern 2: NaOH, H2SO4)
+     |               UNIVERSAL_VISION_PROMPT
+Firebase cache           |
+HIT -> Return        Structured output:
+     |               JENIS/SOALAN/DATA/FORMULA
+     |               PERSAMAAN/JENIS_PENGIRAAN
+Extractor                |
+     |               extract_from_vision_output()
+     |               → detect solver type
+     |               → build clean question
+Universal Router <----------/
      |
-Router -> identify task
+JENIS_PENGIRAAN → solver function mapping:
+stoich_mass         → solve_stoichiometry(want="mass")
+stoich_vol          → solve_stoichiometry(want="volume_rtp")
+stoich_from_molarity→ solve_stoichiometry(given_molarity=...)
+thermochem_forward  → solve_thermochemistry_full(want="delta_H")
+thermochem_reverse  → solve_thermochemistry_full(want="delta_T") [BARU]
+ph_from_H           → solve_ph_universal(ion_type="H+")
+ph_from_OH          → solve_ph_universal(ion_type="OH-") [BARU]
+titration           → solve_titration_universal(coeff1, coeff2)
+voltaic_cell        → solve_voltaic_cell()
+...
      |
-CALCULATION              THEORY
-Solver Python       RAG -> nota markdown
-(deterministic)          |
-     |              llama-3.3-70b
-llama-3.1-8b        (synthesis nota)
-(explain 3-4 ayat)
+llama-3.1-8b (explain 3-4 ayat)
      |
-Tiada context -> Mesej fallback
-     |
-Save Firebase -> Return answer
+Save Firebase → Return answer
 ```
-
-### 3-Model Architecture
-| Model | Task | RPD | TPM |
-|---|---|---|---|
-| llama-3.3-70b-versatile | Teori (RAG) | 1K | 12K |
-| llama-3.1-8b-instant | Explain solver | 14.4K | 6K |
-| llama-4-scout-17b | Vision (gambar) | 1K | 30K |
 
 ---
 
@@ -240,58 +244,61 @@ Save Firebase -> Return answer
 | v3.0.0 | 09 May 2026 | Smart memory — shared cache + personal |
 | v3.1.0 | 10 May 2026 | Major extractor fixes + LLM discipline |
 | v3.2.0 | 10 May 2026 | Photo/Vision + 3-model + 3 new solvers |
+| v3.3.0 | 10 May 2026 | 6 bug fixes based on stress test results |
+| v3.4.0 | 10 May 2026 | Universal solver (Johor+Terengganu patterns) |
 
-### v3.2.0 New Solvers
-| Task | Formula | Contoh Soalan |
-|---|---|---|
-| stoichiometry_volume_to_mass | n=V/Vm, m=nM | 120cm3 Cl2 -> jisim FeCl3 |
-| voltaic_cell | E0sel = E0katod - E0anod | Sel Zn-Cu, E0=? |
-| molarity_from_delta_h | mol=Q/dH, M=mol/V | dH=-57.3 kJ/mol, dT=7C, M=? |
+---
 
-### v3.2.0 Vision Fixes
-| Fix | Detail |
-|---|---|
-| extract_valid_formulas | Pattern 1 khusus formula kompleks K4Fe(CN)6.3H2O |
-| preprocess_vision_question | Strip DATA square brackets, parse SOALAN/PILIHAN/DATA |
-| Vision prompt | Formula MESTI dalam SOALAN section, bukan di luar |
-| Scout prompt | Arahan derive formula IUPAC dan letak dalam SOALAN |
+## 🐛 BUG FIXES LOG (v3.3.0)
 
-### v3.1.0 Bug Fixes (14 bugs)
-| Bug | Fix |
-|---|---|
-| "Sebatian" parse sebagai "Se" | BM Stopwords |
-| Cas ion SO4 2- diabaikan | extract_ion_charge() |
-| Entalpi route ke gas solver | Thermochemistry check dahulu |
-| Titrasi route ke gas solver | Titration check dahulu |
-| DeltaH endotermik tanda salah | Label eksotermik/endotermik |
-| Jisim larutan salah | total_mass = sum(volumes_cm3) |
-| Kemolaran jadi pOH | pOH detect bila keyword eksplisit sahaja |
-| Multi-formula mol | Task baru moles_multi |
-| Jisim untuk buat larutan | Task baru mass_from_molarity |
-| Stoikiometri formula salah | extract_equation v2 + smart target |
-| [Ar=X] rosak equation | Strip dalam normalize_text |
-| Equation trim salah | Trim RHS pada " jika " tanpa koma |
-| Stoikiometri tanya isipadu | Task baru stoichiometry_mass_to_volume |
-| LLM jawab pengiraan | Strict LLM discipline |
+| # | Bug | Fail | Fix |
+|---|---|---|---|
+| 1 | Concentration crash | solver_engine.py | Try/except + fix routing |
+| 2 | Thermochem J→kJ | solver_engine.py | ÷1000 betul |
+| 3 | Stoich crash bila mol | solver_engine.py | Accept given_mol param |
+| 4 | Kepekatan molar missing | solver_engine.py | Kira mol/dm³ sekali |
+| 5 | Titration nisbah salah | solver_engine.py | Formula (M1V1)/c1=(M2V2)/c2 |
+| 6 | MOLFROMDH incomplete | solver_engine.py | Tambah langkah kira M |
+| 7 | "Berapa" = formula | extractor.py | BM stopwords |
+| 8 | Cas ion salah | extractor.py | extract_ion_charge() fix |
+| 9 | Thermochem EN route salah | router.py | Tambah EN keywords |
+| 10 | Mass from molarity route salah | router.py | Tambah "buat larutan" keyword |
+| 11 | OOS format kimia | main.py | Fix rejection message |
+
+---
+
+## 🧪 STRESS TEST RESULTS (10 May 2026)
+
+| Sesi | Soalan | Lulus | Pass Rate |
+|---|---|---|---|
+| Sesi 1 (teks) | 44 | 28 | 63% |
+| Sesi 2 (vision) | 10 | 6 | 60% |
+| Sesi 3 (teks) | 12 | 8 | 67% |
+| **Jumlah** | **66** | **42** | **63.6%** |
+
+**Jangkaan selepas v3.4.0:** ~90% pass rate
 
 ---
 
 ## 🚧 PENDING TASKS
 
-### HIGH PRIORITY
-1. Test vision Q5 JMR K4Fe(CN)6.3H2O — patut 🧮 422 selepas fix formula extraction
-2. Test 3 solver baru — Q38 (0.542g), Q37 (1.028 mol/dm3), Q34 (+1.10V)
-3. More vision testing — jadual, graf, organik struktur
+### KRITIKAL — Perlu push segera
+1. Merge `solver_engine_fixed.py` → `solver/solver_engine.py`
+2. Merge `universal_spm_solver.py` → `solver/solver_engine.py`
+3. Update `api/vision.py` → ganti VISION_SYSTEM_PROMPT
+4. Update `solver/extractor.py` → tambah extract_from_vision_output()
+5. Update `solver/router.py` → tambah SOLVER_TYPE_MAP
 
-### MEDIUM PRIORITY
-4. Add more past year questions to QA index (currently 13 vectors)
-5. Quiz improvement — subjective, difficulty levels
-6. Diagram descriptions dalam knowledge_base
+### MEDIUM — Selepas push
+6. Analisis kertas negeri lain (Kedah, Pahang, Perak, Kelantan)
+7. Tambah Ar override dari soalan (Cu=64 dalam soalan vs Cu=63.5 standard)
+8. Selangor 2024 — OCR untuk scanned PDF
+9. Tambah more past year ke QA index
 
-### LOW PRIORITY
-7. Admin dashboard
-8. Rate limiting middleware
-9. CI/CD auto-rebuild FAISS
+### LOW
+10. Admin dashboard
+11. Rate limiting middleware
+12. CI/CD auto-rebuild FAISS
 
 ---
 
@@ -311,31 +318,7 @@ curl -X POST https://cikgiaikimia.onrender.com/api/chat \
 
 # Clear Firebase cache (WAJIB selepas deploy baru)
 # Firebase Console -> Firestore -> qa_cache -> Delete collection
-
-# Clear session
-curl -X DELETE https://cikgiaikimia.onrender.com/api/memory/session/tg_123456
-
-# Rebuild FAISS
-cd CikgiAIKimia && set PYTHONPATH=.
-python scripts/build_index_v2.py --skip-diagrams
 ```
-
----
-
-## 📊 BENCHMARK (Tested 10 May 2026)
-
-| Question | Expected | Status |
-|---|---|---|
-| Mol 4g NaOH | 0.1 mol | OK |
-| Entalpi peneutralan | -53.76 kJ/mol | OK |
-| Entalpi pemelarutan endotermik | +50.4 kJ/mol | OK |
-| JMR K4Fe(CN)6.3H2O | 422 | TESTING |
-| Stoich Fe2O3+CO->Fe | 5.6g | OK |
-| Stoich 120cm3 Cl2->FeCl3 | 0.542g | NEW |
-| Voltaic sel Zn-Cu | +1.10V | NEW |
-| Molarity from dH=-57.3 | 1.026 mol/dm3 | NEW |
-| Soalan luar konteks | Rejected | OK |
-| GAMBAR Q6 Ikatan kovalen | Kovalen | OK |
 
 ---
 
@@ -349,16 +332,19 @@ GitHub: https://github.com/msallehroslan/CikgiAIKimia
 Live: https://cikgiaikimia.onrender.com
 Bot: @TicerHawaAIBot
 Firebase: cikgu-kimia-66b7b
-Current version: v3.2.0
+Current version: v3.4.0 (pending push)
+
+FILES TO UPLOAD TOGETHER:
+1. README.md (this file)
+2. solver_engine_v340.py (gabungan semua solver fix)
+3. vision_extractor_v340.py (vision prompt + extractor)
 
 Task for this session:
-1. [describe your task here]
+[describe your task here]
 ```
-
-Then attach this README.md file.
 
 ---
 
 *Last updated: 10 May 2026*
-*Current version: v3.2.0*
-*Next: Test Q5 vision fix, test 3 new solvers, more vision testing*
+*Current deployed: v3.2.0*
+*Pending push: v3.4.0 (solver fixes + universal solver + vision update)*
