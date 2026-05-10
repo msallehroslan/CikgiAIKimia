@@ -439,13 +439,17 @@ async def setup_telegram(app_instance):
                 await update.message.chat.send_action(ChatAction.TYPING)
                 groq_key = os.environ.get("GROQ_API_KEY", "")
 
-                from vision import interpret_question
-                clean_question = await interpret_question(
-                    raw_text=raw_text,
-                    lang=lang,
-                    groq_api_key=groq_key,
-                    explain_model=GROQ_EXPLAIN_MODEL,
-                )
+                try:
+                    from vision import interpret_question
+                    clean_question = await interpret_question(
+                        raw_text=raw_text,
+                        lang=lang,
+                        groq_api_key=groq_key,
+                        explain_model=GROQ_EXPLAIN_MODEL,
+                    )
+                except Exception as interp_err:
+                    logger.warning(f"interpret_question failed: {interp_err} — using raw text")
+                    clean_question = raw_text
 
                 # Show extracted + interpreted preview to user
                 preview = clean_question[:250] + "..." if len(clean_question) > 250 else clean_question
@@ -475,9 +479,10 @@ async def setup_telegram(app_instance):
                     logger.warning(f"call_api failed for vision: {api_err}")
 
                 # ── Step 6: Safety fallback — jika solver masih fail ──────
-                # Rare case: question type not supported yet (e.g. voltaic cell)
-                # LLM answers directly with SPM format
-                if not answer or answer_type == "fallback":
+                # Only trigger if answer is truly empty/None
+                # If answer exists but answer_type=fallback, still use it
+                # (RAG found partial context — better than calling LLM again)
+                if not answer:
                     try:
                         if groq_key:
                             from groq import AsyncGroq
@@ -497,18 +502,18 @@ Jika soalan MCQ — WAJIB:
 3. Akhiri dengan baris: "Jawapan betul: X"
 JANGAN biarkan jawapan tergantung — MESTI bagi jawapan akhir yang jelas.
 
-Jika soalan CARI FORMULA dari persamaan — contoh Q24:
+Jika soalan CARI FORMULA dari persamaan pembakaran:
 "P + 3O2 → 2CO2 + 3H2O, apakah P?"
-Cara: kira atom C dan H dari produk, kemudian tentukan formula P.
-2CO2 = 2C, 3H2O = 6H → P = C2H6
+Cara: kira atom C dari CO2, atom H dari H2O, tentukan formula.
+2CO2 = 2C, 3H2O = 6H → P = C2H6 → Jawapan: B
 
-Jika soalan MOL ATOM — contoh Q4:
+Jika soalan MOL ATOM:
 "Gas mana mengandungi 0.6 mol atom pada RTP?"
-Cara: n = V/Vm, kemudian mol atom = n × bilangan atom per molekul
-Neon (monoatomik): 0.2mol × 1 = 0.2 mol atom
-SO3 (4 atom): 0.2mol × 3 = 0.6 mol atom → C
+n = V/Vm = 4.8/24 = 0.2 mol
+Ne×1=0.2, N2×2=0.4, SO3×4=0.8, CO2×3=0.6 ✓ → Jawapan: D
 
 Jika soalan TEORI — jawab 3-5 ayat mengikut sukatan SPM.
+JANGAN tulis "This topic is not fully covered" — jawab terus.
 
 SOALAN:
 {clean_question}"""
