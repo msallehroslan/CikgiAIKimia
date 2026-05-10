@@ -485,21 +485,26 @@ async def setup_telegram(app_instance):
                             fallback_prompt = f"""Kamu adalah Cikgu AI Kimia, tutor kimia SPM Malaysia.
 Jawab soalan kimia SPM berikut dengan tepat dalam Bahasa Malaysia.
 
-Jika PENGIRAAN: guna format SPM:
-Diberi: [nilai]
-Formula: [formula]
-Pengiraan: [langkah]
-Jawapan: [jawapan + unit]
+Jika soalan PENGIRAAN — guna format SPM:
+Diberi: [nilai yang diberi]
+Formula: [formula yang digunakan]
+Pengiraan: [langkah pengiraan]
+Jawapan: [jawapan akhir + unit]
 
-Jika MCQ: nyatakan jawapan (A/B/C/D) dan penjelasan 2-3 ayat.
-Jika TEORI: jawab 3-5 ayat mengikut sukatan SPM.
+Jika soalan MCQ — WAJIB:
+1. Nyatakan jawapan: "Jawapan: X" (X = A, B, C atau D)
+2. Pengiraan atau penjelasan ringkas (3-5 ayat)
+3. Akhiri dengan: "Jawapan betul: X"
+JANGAN biarkan jawapan tergantung — MESTI bagi jawapan akhir yang jelas.
+
+Jika soalan TEORI — jawab 3-5 ayat mengikut sukatan SPM.
 
 SOALAN:
 {clean_question}"""
                             resp = await client.chat.completions.create(
                                 model=GROQ_MODEL,
                                 messages=[{"role": "user", "content": fallback_prompt}],
-                                max_tokens=600,
+                                max_tokens=800,
                                 temperature=0.1,
                             )
                             answer      = resp.choices[0].message.content.strip()

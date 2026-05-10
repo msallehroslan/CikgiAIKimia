@@ -56,55 +56,68 @@ GEMINI_API_KEY    = os.environ.get("GEMINI_API_KEY", "")
 GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 GEMINI_MODEL      = "gemini-1.5-flash"
 
-# Prompt untuk extract soalan kimia dari gambar
-# KRITIKAL: No LaTeX, no unicode subscript, plain text formula only
-VISION_PROMPT_BM = """Kamu adalah pembantu kimia SPM Malaysia.
-Lihat gambar ini dan ekstrak SEMUA teks soalan kimia.
+# ─────────────────────────────────────────────────────────────────────────────
+# VISION PROMPT — Combined Extract + Interpret in ONE call
+# Strategy: Scout reads image AND outputs clean solver-ready question
+# Saves 1 API call vs old 2-step (extract then interpret separately)
+# ─────────────────────────────────────────────────────────────────────────────
+VISION_PROMPT_BM = """Kamu adalah tutor kimia SPM Malaysia yang membaca gambar soalan.
+Buat DUA perkara dalam SATU respons:
 
-PERATURAN WAJIB untuk formula kimia:
-- Tulis dalam format BIASA: H2O, NaOH, K4Fe(CN)6, H2SO4, CO2
-- JANGAN guna LaTeX: JANGAN tulis $\\rm K_4Fe(CN)_6$ atau \\text{}
-- JANGAN guna subscript unicode: JANGAN tulis H₂O atau SO₄²⁻
-- GUNAKAN nombor biasa: H2O bukan H₂O, SO4 bukan SO₄
-- Formula dengan titik air kristal: tulis K4Fe(CN)6.3H2O
-- Ion berkas: tulis SO4 2-, MnO4-, Cr2O7 2-
+LANGKAH 1 — BACA gambar dan extract semua teks
+LANGKAH 2 — OUTPUT soalan dalam format bersih siap untuk dijawab
 
-PERATURAN WAJIB untuk kotak dan rajah:
-- Jika ada formula atau teks dalam KOTAK (box) — MESTI baca dan extract kandungannya
-- Jika ada formula dalam rajah berlabel "Rajah 1" atau "Diagram 1" — MESTI extract formula tersebut
-- Jangan tulis [RAJAH] jika kotak mengandungi formula kimia — baca dan tulis formulanya
-- Hanya tulis [RAJAH] jika kotak mengandungi gambar/struktur yang benar-benar tidak boleh dibaca sebagai teks
+FORMAT OUTPUT (ikut tepat-tepat):
+SOALAN: [tulis soalan lengkap dengan data]
+PILIHAN: A.[teks] B.[teks] C.[teks] D.[teks]  ← hanya jika MCQ
+DATA: [Jisim atom relatif dan data lain jika ada]
 
-PERATURAN untuk soalan MCQ:
-- Sertakan soalan DAN semua pilihan jawapan (A, B, C, D)
-- Sertakan data yang diberi (Jisim atom relatif, dll)
-- Jika ada jadual, tulis dalam format teks biasa
+PERATURAN formula kimia (WAJIB):
+- Format biasa SAHAJA: H2O, NaOH, K4Fe(CN)6.3H2O, SO4 2-, MnO4-
+- JANGAN LaTeX: tiada $\\rm K_4Fe$ atau _4 atau ^2-
+- JANGAN unicode: tiada H₂O, SO₄²⁻ — guna H2O, SO4 2-
 
-Balas dengan teks soalan SAHAJA. Tiada penjelasan. Tiada markdown header."""
+PERATURAN kotak/rajah:
+- Formula dalam KOTAK → MESTI baca dan tulis dalam OUTPUT
+- Nama kimia ada tapi formula tiada → DERIVE formula dari nama
+  Contoh: "kalium heksasianoferat(III) terhidrat" → K4Fe(CN)6.3H2O
+  Contoh: "kuprum(II) sulfat pentahidrat" → CuSO4.5H2O
+- [RAJAH] hanya untuk gambar/struktur yang benar-benar tidak boleh jadi teks
 
-VISION_PROMPT_EN = """You are an SPM chemistry tutor assistant.
-Extract ALL chemistry question text from this image.
+PERATURAN MCQ:
+- Sertakan soalan DAN semua pilihan A, B, C, D
+- Sertakan semua data yang diberi
 
-CRITICAL RULES for chemical formulas:
-- Use PLAIN TEXT format only: H2O, NaOH, K4Fe(CN)6, H2SO4, CO2
-- NO LaTeX: do NOT write $\\rm K_4Fe(CN)_6$ or \\text{}
-- NO unicode subscripts: do NOT write H₂O or SO₄²⁻
-- Use regular numbers: H2O not H₂O, SO4 not SO₄
-- Water of crystallisation: write K4Fe(CN)6.3H2O
-- Ionic charges: write SO4 2-, MnO4-, Cr2O7 2-
+Balas dengan FORMAT OUTPUT sahaja. Tiada penjelasan lain."""
 
-CRITICAL RULES for boxes and diagrams:
-- If a formula or text is inside a BOX — you MUST read and extract its content
-- If a formula is in a diagram labelled "Diagram 1" or "Rajah 1" — MUST extract the formula
-- Do NOT write [DIAGRAM] if the box contains a chemical formula — read and write it
-- Only write [DIAGRAM] if the box contains an actual image/structure that truly cannot be read as text
+VISION_PROMPT_EN = """You are an SPM chemistry tutor reading a question image.
+Do TWO things in ONE response:
 
-RULES for MCQ questions:
-- Include question AND all answer options (A, B, C, D)
-- Include given data (Relative atomic mass, etc.)
-- If there is a table, write it in plain text
+STEP 1 — READ image and extract all text
+STEP 2 — OUTPUT question in clean format ready to be answered
 
-Reply with question text ONLY. No explanation. No markdown headers."""
+OUTPUT FORMAT (follow exactly):
+QUESTION: [full question with data]
+OPTIONS: A.[text] B.[text] C.[text] D.[text]  ← only if MCQ
+DATA: [Relative atomic mass and other data if present]
+
+FORMULA RULES (MANDATORY):
+- Plain text ONLY: H2O, NaOH, K4Fe(CN)6.3H2O, SO4 2-, MnO4-
+- NO LaTeX: no $\\rm K_4Fe$ or _4 or ^2-
+- NO unicode: no H₂O, SO₄²⁻ — use H2O, SO4 2-
+
+BOX/DIAGRAM RULES:
+- Formula inside a BOX → MUST read and write in OUTPUT
+- Chemical name present but formula missing → DERIVE formula from name
+  Example: "potassium hexacyanoferrate(III) trihydrate" → K4Fe(CN)6.3H2O
+  Example: "copper(II) sulphate pentahydrate" → CuSO4.5H2O
+- [DIAGRAM] only for images/structures that truly cannot be text
+
+MCQ RULES:
+- Include question AND all options A, B, C, D
+- Include all given data
+
+Reply with OUTPUT FORMAT only. No extra explanation."""
 
 
 # ── GROQ VISION ───────────────────────────────────────────────────────────────
@@ -347,28 +360,21 @@ async def interpret_question(
     explain_model: str = "llama-3.1-8b-instant",
 ) -> str:
     """
-    Step 2 of vision pipeline — LLM interpret extracted text.
+    OPTIMISED: interpret_question is now a passthrough for Groq/Gemini.
 
-    Takes messy OCR/vision output and converts to clean,
-    solver-ready question text.
+    Reason: Scout/Gemini vision prompts now do extract + interpret in ONE call.
+    This saves 1 API call per photo (was: Scout extract → 8b interpret → solver)
+    Now: Scout extract+interpret → solver  (1 call saved per photo)
 
-    Examples:
-      IN:  "## Soalan Kimia SPM\n5\n$\\rm K_4Fe(CN)_6.3H_2O$\nApakah jisim relatif?"
-      OUT: "Apakah jisim relatif bagi K4Fe(CN)6.3H2O? [H=1, C=12, O=16, K=39, Fe=56, N=14]"
-
-      IN:  "A 141\nB 256\nC 389\nD 422"  (MCQ with no question)
-      OUT: "Hitungkan JMR bagi K4Fe(CN)6.3H2O [H=1,C=12,O=16,K=39,Fe=56,N=14]"
-
-    Args:
-        raw_text     : cleaned extracted text from vision
-        lang         : "BM" or "EN"
-        groq_api_key : Groq API key
-        explain_model: model to use (8b-instant, fast and sufficient)
-
-    Returns:
-        Clean question text ready for solver/RAG pipeline
-        Falls back to raw_text if LLM fails
+    This function still runs for TESSERACT only — OCR output needs interpretation.
+    For groq/gemini, raw_text is already clean from the combined prompt.
     """
+    # For groq/gemini — already clean from combined prompt, skip interpret
+    if VISION_PROVIDER in ("groq", "gemini"):
+        logger.info("interpret_question: skipped (groq/gemini combined prompt)")
+        return raw_text
+
+    # For tesseract — OCR is messy, needs LLM interpretation
     if not groq_api_key or not raw_text:
         return raw_text
 
