@@ -57,19 +57,52 @@ GROQ_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 GEMINI_MODEL      = "gemini-1.5-flash"
 
 # Prompt untuk extract soalan kimia dari gambar
-VISION_PROMPT_BM = """Kamu adalah pembantu kimia SPM. 
-Lihat gambar ini dan ekstrak SEMUA teks soalan kimia yang ada.
-Jika ada soalan dengan nombor (1, 2, 3...), senaraikan semua.
-Jika ada formula kimia, tulis dengan betul (contoh: H2O, NaOH, CO2).
-Jika ada rajah atau gambar yang tidak boleh dibaca, tulis [RAJAH].
-Balas dengan teks soalan sahaja, tiada penjelasan tambahan."""
+# KRITIKAL: No LaTeX, no unicode subscript, plain text formula only
+VISION_PROMPT_BM = """Kamu adalah pembantu kimia SPM Malaysia.
+Lihat gambar ini dan ekstrak SEMUA teks soalan kimia.
 
-VISION_PROMPT_EN = """You are an SPM chemistry assistant.
-Look at this image and extract ALL chemistry question text.
-If there are numbered questions, list all of them.
-Write chemical formulas correctly (e.g. H2O, NaOH, CO2).
-If there is a diagram that cannot be read, write [DIAGRAM].
-Reply with question text only, no extra explanation."""
+PERATURAN WAJIB untuk formula kimia:
+- Tulis dalam format BIASA: H2O, NaOH, K4Fe(CN)6, H2SO4, CO2
+- JANGAN guna LaTeX: JANGAN tulis $\\rm K_4Fe(CN)_6$ atau \\text{}
+- JANGAN guna subscript unicode: JANGAN tulis H₂O atau SO₄²⁻
+- GUNAKAN nombor biasa: H2O bukan H₂O, SO4 bukan SO₄
+- Formula dengan titik air kristal: tulis K4Fe(CN)6.3H2O
+- Ion berkas: tulis SO4 2-, MnO4-, Cr2O7 2-
+
+PERATURAN untuk soalan MCQ:
+- Sertakan soalan DAN semua pilihan jawapan (A, B, C, D)
+- Sertakan data yang diberi (Jisim atom relatif, dll)
+- Jika ada jadual, tulis dalam format teks biasa
+
+PERATURAN untuk rajah/gambar:
+- Jika ada rajah yang tidak boleh dibaca dalam teks, tulis [RAJAH]
+- Jika ada graf, tulis [GRAF] dan huraikan paksi jika boleh dibaca
+- Jika ada formula struktur kimia organik, huraikan dalam teks
+
+Balas dengan teks soalan SAHAJA. Tiada penjelasan. Tiada markdown header."""
+
+VISION_PROMPT_EN = """You are an SPM chemistry tutor assistant.
+Extract ALL chemistry question text from this image.
+
+CRITICAL RULES for chemical formulas:
+- Use PLAIN TEXT format only: H2O, NaOH, K4Fe(CN)6, H2SO4, CO2
+- NO LaTeX: do NOT write $\\rm K_4Fe(CN)_6$ or \\text{}
+- NO unicode subscripts: do NOT write H₂O or SO₄²⁻
+- Use regular numbers: H2O not H₂O, SO4 not SO₄
+- Water of crystallisation: write K4Fe(CN)6.3H2O
+- Ionic charges: write SO4 2-, MnO4-, Cr2O7 2-
+
+RULES for MCQ questions:
+- Include question AND all answer options (A, B, C, D)
+- Include given data (Relative atomic mass, etc.)
+- If there is a table, write it in plain text
+
+RULES for diagrams:
+- If diagram cannot be read as text, write [DIAGRAM]
+- If graph, write [GRAPH] and describe axes if readable
+- If organic structural formula, describe it in text
+
+Reply with question text ONLY. No explanation. No markdown headers."""
 
 
 # ── GROQ VISION ───────────────────────────────────────────────────────────────
@@ -239,15 +272,70 @@ async def extract_question_from_image(
 
     logger.info(f"Vision provider: {VISION_PROVIDER}, image size: {len(image_bytes)} bytes")
 
+    raw_text = None
     if VISION_PROVIDER == "groq":
-        return await _extract_groq(image_bytes, lang)
+        raw_text = await _extract_groq(image_bytes, lang)
     elif VISION_PROVIDER == "gemini":
-        return await _extract_gemini(image_bytes, lang)
+        raw_text = await _extract_gemini(image_bytes, lang)
     elif VISION_PROVIDER == "tesseract":
-        return await _extract_tesseract(image_bytes, lang)
+        raw_text = await _extract_tesseract(image_bytes, lang)
     else:
         logger.error(f"Unknown VISION_PROVIDER: {VISION_PROVIDER}")
         return None
+
+    if raw_text:
+        # Always clean extracted text — remove LaTeX, unicode subscripts, etc.
+        cleaned = clean_extracted_text(raw_text)
+        logger.info(f"Cleaned text ({len(raw_text)} → {len(cleaned)} chars)")
+        return cleaned
+    return None
+
+
+def clean_extracted_text(text: str) -> str:
+    """
+    Post-process extracted text from vision AI.
+    Remove LaTeX formatting, unicode subscripts, and other artifacts
+    that would break the chemistry solver/extractor.
+    """
+    import re
+
+    # Remove LaTeX math delimiters
+    text = re.sub(r'\$\\rm\s*', '', text)
+    text = re.sub(r'\$', '', text)
+    text = re.sub(r'\\text\{([^}]*)\}', r'\1', text)
+    text = re.sub(r'\\rm\s*', '', text)
+
+    # Remove LaTeX subscripts/superscripts → plain numbers
+    # e.g. K_4 → K4, H_2O → H2O, Fe(CN)_6 → Fe(CN)6
+    text = re.sub(r'_\{(\d+)\}', r'\1', text)
+    text = re.sub(r'\^\{([^}]+)\}', r'\1', text)
+    text = re.sub(r'_(\d+)', r'\1', text)
+    text = re.sub(r'\^(\d+)', r'\1', text)
+
+    # Unicode subscript digits → regular digits
+    subscript_map = str.maketrans('₀₁₂₃₄₅₆₇₈₉', '0123456789')
+    text = text.translate(subscript_map)
+
+    # Unicode superscripts → regular
+    superscript_map = str.maketrans('⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻', '0123456789+-')
+    text = text.translate(superscript_map)
+
+    # Unicode arrows → plain text
+    text = text.replace('→', '->').replace('⟶', '->')
+    text = text.replace('⇌', '<->').replace('⇆', '<->')
+
+    # Unicode minus/dash variants → plain hyphen
+    text = text.replace('−', '-').replace('–', '-').replace('—', '-')
+
+    # Unicode multiply → x
+    text = text.replace('×', 'x')
+
+    # Remove excessive whitespace
+    import re as _re
+    text = _re.sub(r'\n{3,}', '\n\n', text)
+    text = _re.sub(r' {2,}', ' ', text)
+
+    return text.strip()
 
 
 def vision_is_enabled() -> bool:

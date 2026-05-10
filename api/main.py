@@ -438,17 +438,74 @@ async def setup_telegram(app_instance):
                     parse_mode=ParseMode.MARKDOWN,
                 )
 
-                # ── Step 5: Send to normal pipeline ──────────────────────
+                # ── Step 5: Send to normal solver/RAG pipeline ───────────
                 await update.message.chat.send_action(ChatAction.TYPING)
-                result = await call_api(extracted_text, session_id=f"tg_{user_id}")
 
-                answer      = result.get("answer", "Maaf, tiada jawapan.")
-                answer_type = result.get("answer_type", "fallback")
-                sources     = result.get("sources", [])
-                ms          = result.get("processing_time_ms", 0)
-                from_cache  = result.get("from_cache", False)
-                provider    = vision_provider_info().get("provider", "?").upper()
+                answer      = None
+                answer_type = "fallback"
+                sources     = []
+                ms          = 0
+                from_cache  = False
 
+                try:
+                    result      = await call_api(extracted_text, session_id=f"tg_{user_id}")
+                    answer      = result.get("answer")
+                    answer_type = result.get("answer_type", "fallback")
+                    sources     = result.get("sources", [])
+                    ms          = result.get("processing_time_ms", 0)
+                    from_cache  = result.get("from_cache", False)
+                except Exception as api_err:
+                    logger.warning(f"call_api failed for vision question: {api_err}")
+
+                # ── Step 6: Fallback LLM jika pipeline gagal ─────────────
+                # Handles cases like: LaTeX remnants, complex MCQ, diagram questions
+                # Uses 70b model — better for unseen question types
+                if not answer or answer_type == "fallback":
+                    try:
+                        groq_key = os.environ.get("GROQ_API_KEY", "")
+                        if groq_key:
+                            from groq import AsyncGroq
+                            client = AsyncGroq(api_key=groq_key)
+                            fallback_prompt = f"""Kamu adalah Cikgu AI Kimia, tutor kimia SPM Malaysia.
+Jawab soalan kimia SPM berikut dengan tepat dan lengkap dalam Bahasa Malaysia.
+
+Jika soalan PENGIRAAN: guna format SPM:
+Diberi: [nilai yang diberi]
+Formula: [formula yang digunakan]
+Pengiraan: [langkah pengiraan]
+Jawapan: [jawapan akhir dengan unit]
+
+Jika soalan MCQ: nyatakan jawapan (A/B/C/D) dan penjelasan ringkas 2-3 ayat.
+Jika soalan TEORI: jawab dalam 3-5 ayat ringkas mengikut sukatan SPM.
+Jika ada [RAJAH] dalam soalan: jawab berdasarkan konteks soalan sahaja.
+
+SOALAN DARI GAMBAR:
+{extracted_text}"""
+                            resp = await client.chat.completions.create(
+                                model=GROQ_MODEL,
+                                messages=[{"role": "user", "content": fallback_prompt}],
+                                max_tokens=600,
+                                temperature=0.1,
+                            )
+                            answer      = resp.choices[0].message.content.strip()
+                            answer_type = "theory"
+                            logger.info("Vision fallback LLM answered successfully")
+                    except Exception as llm_err:
+                        logger.error(f"Vision fallback LLM failed: {llm_err}")
+
+                # ── Step 7: Format and send ───────────────────────────────
+                if not answer:
+                    await update.message.reply_text(
+                        "⚠️ _Tidak dapat menjawab soalan dalam gambar ini._\n\n"
+                        "Cuba:\n"
+                        "• Taip soalan dalam teks terus\n"
+                        "• Pastikan gambar tidak terlalu kecil\n"
+                        "• Satu soalan sahaja dalam satu gambar",
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+                    return
+
+                provider  = vision_provider_info().get("provider", "?").upper()
                 formatted = format_answer(answer, answer_type)
                 src_lines = [f"• {s.get('topic','')}" for s in sources[:2] if s.get('topic')]
                 if src_lines:
@@ -464,7 +521,8 @@ async def setup_telegram(app_instance):
             except Exception as e:
                 logger.error(f"Photo handler error: {e}")
                 await update.message.reply_text(
-                    "⚠️ Ralat semasa memproses gambar. Sila cuba lagi atau taip soalan dalam teks.",
+                    "⚠️ Ralat semasa memproses gambar.\n"
+                    "Sila cuba lagi atau taip soalan dalam teks.",
                 )
 
         async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
