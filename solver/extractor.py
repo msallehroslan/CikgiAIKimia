@@ -5,6 +5,99 @@ from formula_parser import is_valid_formula
 
 
 # =====================================
+# VISION PREPROCESSING FUNCTIONS
+# Must be defined BEFORE any other function that calls them
+# =====================================
+
+def _clean_mcq_options(text: str) -> str:
+    """
+    Remove MCQ answer options from question text.
+    Prevents extractor from parsing "A. 141 B. 256" as formula/value.
+
+    Removes patterns like:
+    - "A. 141  B. 256  C. 389  D. 422"
+    - "A) 141  B) 256"
+    - Lines with only "A. X" pattern
+    """
+    t = text
+
+    # Remove pure MCQ option lines (standalone lines like "A. 141")
+    t = re.sub(r'^\s*[A-D][.)]\s*\S.*$', '', t, flags=re.MULTILINE)
+
+    # Remove inline MCQ block: "A. X  B. Y  C. Z  D. W"
+    t = re.sub(
+        r'\b[A-D][.)]\s*[\w\s.]+\s+[A-D][.)]\s*[\w\s.]+\s+[A-D][.)]\s*[\w\s.]+\s+[A-D][.)]\s*[\w\s.]+',
+        '', t
+    )
+
+    # Remove "A. 141" pattern (letter dot/bracket then number/word)
+    t = re.sub(r'\b[A-D][.)]\s*\d+(?:\.\d+)?\b', '', t)
+
+    # Clean extra whitespace
+    t = re.sub(r' {2,}', ' ', t)
+    t = re.sub(r'\n{3,}', '\n\n', t)
+
+    return t.strip()
+
+
+def preprocess_vision_question(text: str) -> str:
+    """
+    Preprocess question extracted from vision/OCR before feeding to extractor.
+
+    Handles Scout structured output format:
+        SOALAN: Apakah jisim relatif K4Fe(CN)6.3H2O?
+        PILIHAN: A. 141 B. 256 C. 389 D. 422
+        DATA: Jisim atom relatif: H=1, C=12...
+
+    Strategy:
+    1. Detect if structured SOALAN/PILIHAN/DATA format
+    2. Keep SOALAN + DATA, strip PILIHAN (MCQ options confuse extractor)
+    3. Append DATA to SOALAN so Ar values are available to solver
+    4. For plain text — just strip MCQ options
+
+    Test results:
+    - "SOALAN: ...K4Fe(CN)6.3H2O PILIHAN: A.141..." → "...K4Fe(CN)6.3H2O [H=1,C=12...]"
+    - "SOALAN: 0.6 mol atom? PILIHAN: A. neon..." → "0.6 mol atom? [Vm=24 dm3]"
+    - Plain text → passthrough
+    """
+    t = text.strip()
+
+    has_soalan = re.search(r'SOALAN\s*:', t, re.IGNORECASE)
+    has_pilihan = re.search(r'PILIHAN\s*:', t, re.IGNORECASE)
+
+    if not has_soalan and not has_pilihan:
+        # Plain text — just strip MCQ options
+        return _clean_mcq_options(t)
+
+    # Parse structured sections
+    soalan_match = re.search(
+        r'SOALAN\s*:\s*(.*?)(?=PILIHAN\s*:|DATA\s*:|$)',
+        t, re.IGNORECASE | re.DOTALL
+    )
+    data_match = re.search(
+        r'DATA\s*:\s*(.*?)(?=SOALAN\s*:|PILIHAN\s*:|$)',
+        t, re.IGNORECASE | re.DOTALL
+    )
+
+    soalan = soalan_match.group(1).strip() if soalan_match else t
+    data = data_match.group(1).strip() if data_match else ""
+
+    # Build clean question: SOALAN + DATA (strip PILIHAN entirely)
+    clean = soalan
+    if data:
+        data_clean = re.sub(
+            r'^(?:Jisim atom relatif|Relative atomic mass|Data|Diberi)\s*:?\s*',
+            '', data, flags=re.IGNORECASE
+        )
+        clean = clean + " [" + data_clean.strip() + "]"
+
+    # Strip any remaining MCQ options that leaked into SOALAN
+    clean = _clean_mcq_options(clean)
+
+    return clean.strip()
+
+
+# =====================================
 # BM STOPWORDS — KRITIKAL
 # Perkataan BM yang DILARANG parse sebagai simbol kimia
 # FIX BUG #6: "Sebatian" → "Se" (Selenium)
