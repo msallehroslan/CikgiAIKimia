@@ -1,7 +1,13 @@
 """
 telegram_bot.py — Cikgu AI Kimia Telegram Bot
 ===============================================
-Production Telegram bot with:
+Production Telegram bot (PATCHED v3.3.0):
+  - ParseMode.HTML throughout
+  - format_answer_telegram uses HTML (safe for chemistry unicode)
+  - Local OCR → vision API routing
+  - Pending vision confirmation flow
+
+Original description:
   - Text question handling
   - Photo/image handling (OCR for diagram questions)
   - /start, /help, /quiz, /chapter commands
@@ -120,6 +126,8 @@ async def call_quiz_api(topic: str, question_type: str = "mcq", n: int = 3) -> d
 # ---------------------------------------------------------------------------
 
 def format_answer_telegram(answer: str, answer_type: str) -> str:
+    """PATCHED v3.3.0 — HTML mode. Safe for chemistry unicode (ΔH, ⁻¹, °C, →)."""
+    import html as _html
     TYPE_EMOJI = {
         "calculation": "🧮",
         "theory": "📚",
@@ -127,28 +135,32 @@ def format_answer_telegram(answer: str, answer_type: str) -> str:
     }
     emoji = TYPE_EMOJI.get(answer_type, "💬")
 
+    headers = ('Diberi:', 'Formula:', 'Pengiraan:', 'Jawapan:',
+               'Given:', 'Calculation:', 'Answer:')
     lines = []
     for line in answer.split('\n'):
-        if line.strip().startswith(('Diberi:', 'Formula:', 'Pengiraan:', 'Jawapan:')):
-            lines.append(f"*{line.strip()}*")
+        if line.strip().startswith(headers):
+            lines.append(f"<b>{_html.escape(line.strip())}</b>")
         else:
-            lines.append(line)
+            lines.append(_html.escape(line))
 
     formatted = '\n'.join(lines)
-    return f"{emoji} *Jawapan Cikgu AI Kimia*\n\n{formatted}"
+    return f"{emoji} <b>Jawapan Cikgu AI Kimia</b>\n\n{formatted}"
 
 
 def format_sources(sources: list) -> str:
+    """PATCHED v3.3.0 — HTML mode."""
+    import html as _html
     if not sources:
         return ""
     source_lines = []
     for s in sources[:3]:
         topic = s.get('topic', '')
-        ch = s.get('chapter', '')
+        ch    = s.get('chapter', '')
         if topic:
-            source_lines.append(f"• {topic}" + (f" (Bab {ch})" if ch else ""))
+            source_lines.append(f"• {_html.escape(topic)}" + (f" (Bab {ch})" if ch else ""))
     if source_lines:
-        return "\n\n📖 _Sumber: " + ", ".join(source_lines) + "_"
+        return "\n\n<i>📖 Sumber: " + ", ".join(source_lines) + "</i>"
     return ""
 
 
@@ -188,36 +200,36 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     welcome = (
-        "👋 *Selamat datang ke Cikgu AI Kimia!*\n\n"
+        "👋 <b>Selamat datang ke Cikgu AI Kimia!</b>\n\n"
         "Saya boleh membantu anda dalam:\n"
         "• Pengiraan kimia SPM (langkah demi langkah)\n"
         "• Teori dan konsep kimia\n"
         "• Soalan latihan dan kuiz\n\n"
         "Taip soalan anda dalam Bahasa Malaysia atau English.\n\n"
         "Contoh:\n"
-        "_Hitungkan bilangan mol dalam 4.7 g K₂O_\n"
-        "_Terangkan perbezaan eksotermik dan endotermik_"
+        "<i>Hitungkan bilangan mol dalam 4.7 g K₂O</i>\n"
+        "<i>Terangkan perbezaan eksotermik dan endotermik</i>"
     )
     await update.message.reply_text(
         welcome,
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
         reply_markup=reply_markup,
     )
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
-        "📚 *Cikgu AI Kimia — Arahan*\n\n"
+        "📚 <b>Cikgu AI Kimia — Arahan</b>\n\n"
         "/start — Halaman utama\n"
         "/help — Arahan ini\n"
         "/quiz [topik] — Jana soalan kuiz\n"
         "/solve [soalan] — Pengiraan sahaja\n"
         "/chapter [nombor] — Tetapkan penapis bab\n"
         "/clear — Kosongkan tetapan sesi\n\n"
-        "*Format jawapan pengiraan:*\n"
+        "<b>Format jawapan pengiraan:</b>\n"
         "Diberi: → Formula: → Pengiraan: → Jawapan:"
     )
-    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
+    await update.message.reply_text(help_text, parse_mode=ParseMode.HTML)
 
 
 async def cmd_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -239,20 +251,20 @@ async def cmd_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Tiada soalan ditemui untuk topik: {topic}")
             return
 
-        msg = f"📝 *Kuiz: {topic}*\n\n"
+        msg = f"📝 <b>Kuiz: {topic}</b>\n\n"
         for i, q in enumerate(questions, 1):
-            msg += f"*{i}. {q.get('soalan', '')}*\n"
+            msg += f"<b>{i}. {q.get('soalan', '')}</b>\n"
             for opt in q.get('pilihan', []):
                 msg += f"   {opt}\n"
             msg += f"✅ Jawapan: {q.get('jawapan', '')}\n"
             if q.get('penjelasan'):
-                msg += f"💡 _{q['penjelasan']}_\n"
+                msg += f"💡 <i>{q['penjelasan']}</i>\n"
             msg += "\n"
 
         if len(msg) > 4000:
             msg = msg[:4000] + "\n\n_[Soalan dipendekkan]_"
 
-        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
     except Exception as e:
         logger.error(f"Quiz error: {e}")
@@ -276,8 +288,8 @@ async def cmd_solve(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = await call_solve_api(question)
         if result.get("success"):
             await update.message.reply_text(
-                f"🧮 *Pengiraan*\n\n{result['answer']}",
-                parse_mode=ParseMode.MARKDOWN,
+                f"🧮 <b>Pengiraan</b>\n\n{result['answer']}",
+                parse_mode=ParseMode.HTML,
             )
         else:
             await update.message.reply_text(
@@ -320,14 +332,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Taip topik kuiz anda. Contoh:\n/quiz Konsep Mol")
     elif data == "mode_theory":
         await query.edit_message_text(
-            "📚 *Mod Teori*\nTaip soalan teori anda.\nContoh: _Apakah maksud pH?_",
-            parse_mode=ParseMode.MARKDOWN,
+            "📚 <b>Mod Teori</b>\nTaip soalan teori anda.\nContoh: <i>Apakah maksud pH?</i>",
+            parse_mode=ParseMode.HTML,
         )
     elif data == "mode_calc":
         await query.edit_message_text(
-            "🧮 *Mod Pengiraan*\nTaip soalan pengiraan anda.\n"
+            "🧮 <b>Mod Pengiraan</b>\nTaip soalan pengiraan anda.\n"
             "Contoh: _Hitungkan bilangan mol dalam 4.7 g K₂O_",
-            parse_mode=ParseMode.MARKDOWN,
+            parse_mode=ParseMode.HTML,
         )
 
 
@@ -336,11 +348,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------------------------
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+    user_id  = update.effective_user.id
     question = update.message.text.strip()
 
     if not question or len(question) < 3:
         return
+
+    # PATCHED v3.3.0 — pending vision confirmation flow
+    if question.lower() in ("ya", "yes", "betul", "correct", "ok"):
+        pending = context.user_data.pop("pending_vision_question", None)
+        if pending:
+            question = pending
 
     if is_rate_limited(user_id):
         await update.message.reply_text("⏳ Terlalu banyak permintaan. Sila cuba sebentar lagi.")
@@ -365,14 +383,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         formatted = format_answer_telegram(answer, answer_type)
         formatted += format_sources(sources)
-        formatted += f"\n\n_⏱ {processing_ms:.0f}ms_"
+        formatted += f"\n\n<i>⏱ {processing_ms:.0f}ms</i>"
 
         if len(formatted) > 4096:
             chunks = [formatted[i:i+4000] for i in range(0, len(formatted), 4000)]
             for chunk in chunks:
-                await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+                await update.message.reply_text(chunk, parse_mode=ParseMode.HTML)
         else:
-            await update.message.reply_text(formatted, parse_mode=ParseMode.MARKDOWN)
+            await update.message.reply_text(formatted, parse_mode=ParseMode.HTML)
 
     except Exception as e:
         logger.error(f"Message handler error: {e}")
@@ -417,8 +435,9 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        f"🔍 Teks dijumpai dalam gambar:\n_{question[:200]}_",
-        parse_mode=ParseMode.MARKDOWN,
+        import html as _html_bot
+        f"🔍 Teks dijumpai dalam gambar:\n<code>{_html_bot.escape(question[:200])}</code>",
+        parse_mode=ParseMode.HTML,
     )
 
     try:
@@ -428,7 +447,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         answer = result.get("answer", "Maaf, tiada jawapan.")
         formatted = format_answer_telegram(answer, result.get("answer_type", "theory"))
-        await update.message.reply_text(formatted, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(formatted, parse_mode=ParseMode.HTML)
     except Exception as e:
         await update.message.reply_text(f"Ralat memproses gambar: {e}")
 

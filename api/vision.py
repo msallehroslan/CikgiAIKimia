@@ -1,8 +1,9 @@
 """
 vision.py — Cikgu AI Kimia Vision Module
 =========================================
-Version: 2.0.0
-Date   : 10 May 2026
+Version: 2.1.0 (Patched)
+Date   : 2026
+Patched: groq_client retry, local OCR fallback, confidence gate
 
 Handles photo/image input from Telegram.
 Extracts chemistry question text from image using vision AI.
@@ -164,57 +165,54 @@ Reply with OUTPUT FORMAT only. No extra explanation."""
 # ── GROQ VISION ───────────────────────────────────────────────────────────────
 async def _extract_groq(image_bytes: bytes, lang: str = "BM") -> Optional[str]:
     """
-    Extract text from image using Groq Llama 4 Scout (multimodal).
-    Free tier: 30 RPM, 1K RPD, 30K TPM.
+    PATCHED v3.3.0 — Uses groq_client.call_vision() for hardened extraction.
+    Includes: retry (3x), circuit breaker, daily quota tracking, async semaphore.
+    Falls back to direct call if groq_client.py not yet deployed.
     """
+    prompt = VISION_PROMPT_BM if lang == "BM" else VISION_PROMPT_EN
+
+    if image_bytes[:3] == b'\xff\xd8\xff':
+        media_type = "image/jpeg"
+    elif image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+        media_type = "image/png"
+    elif image_bytes[:6] in (b'GIF87a', b'GIF89a'):
+        media_type = "image/gif"
+    elif image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+        media_type = "image/webp"
+    else:
+        media_type = "image/jpeg"
+
+    # Try hardened groq_client first
+    try:
+        from groq_client import call_vision as _call_vision
+        result = await _call_vision(image_bytes, prompt, media_type=media_type)
+        if result:
+            logger.info(f"Groq Vision (hardened) extracted {len(result)} chars")
+        return result
+    except ImportError:
+        pass  # groq_client.py not yet deployed — use direct call
+
+    # Direct fallback (no retry protection)
     if not GROQ_API_KEY:
         logger.error("GROQ_API_KEY not set")
         return None
-
     try:
         from groq import AsyncGroq
-
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-
-        if image_bytes[:3] == b'\xff\xd8\xff':
-            media_type = "image/jpeg"
-        elif image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
-            media_type = "image/png"
-        elif image_bytes[:6] in (b'GIF87a', b'GIF89a'):
-            media_type = "image/gif"
-        elif image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
-            media_type = "image/webp"
-        else:
-            media_type = "image/jpeg"
-
-        prompt = VISION_PROMPT_BM if lang == "BM" else VISION_PROMPT_EN
-
-        client = AsyncGroq(api_key=GROQ_API_KEY)
-        response = await client.chat.completions.create(
+        client    = AsyncGroq(api_key=GROQ_API_KEY)
+        response  = await client.chat.completions.create(
             model=GROQ_VISION_MODEL,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{media_type};base64,{image_b64}"
-                        }
-                    },
-                    {
-                        "type": "text",
-                        "text": prompt
-                    }
-                ]
-            }],
+            messages=[{"role": "user", "content": [
+                {"type": "image_url",
+                 "image_url": {"url": f"data:{media_type};base64,{image_b64}"}},
+                {"type": "text", "text": prompt},
+            ]}],
             max_tokens=1200,
             temperature=0.1,
         )
-
         extracted = response.choices[0].message.content.strip()
-        logger.info(f"Groq Vision extracted {len(extracted)} chars")
+        logger.info(f"Groq Vision (direct) extracted {len(extracted)} chars")
         return extracted if extracted else None
-
     except Exception as e:
         logger.error(f"Groq Vision error: {e}")
         return None
@@ -574,30 +572,78 @@ async def extract_question_from_image(
     lang: str = "BM",
 ) -> Optional[str]:
     """
-    Main entry point — backward compatible.
-    Returns extracted question as string.
+    PATCHED v3.3.0 — Hardened vision pipeline with local OCR fallback.
+
+    Flow:
+      1. Try Groq Vision (hardened via groq_client — retry + quota)
+      2. On failure → local OCR fallback (Tesseract/Paddle via local_ocr.py)
+      3. Apply chemistry corrections (H20→H2O, DH→ΔH, etc.)
+      4. Score OCR confidence via confidence_scorer.py:
+           HIGH (≥0.70)   → return text normally
+           MEDIUM (≥0.45) → prefix "__MEDIUM_CONF__" (handler shows preview)
+           LOW (<0.45)    → return None (handler asks to retype)
+
+    Returns:
+      str   — extracted text (may have __MEDIUM_CONF__ prefix)
+      None  — extraction failed or confidence too low
     """
     if VISION_PROVIDER == "none":
         return None
 
-    logger.info(f"Vision provider: {VISION_PROVIDER}, image size: {len(image_bytes)} bytes")
+    logger.info(f"Vision provider: {VISION_PROVIDER}, image_size: {len(image_bytes)} bytes")
 
-    raw_text = None
+    raw_text: Optional[str] = None
+    actual_provider = "none"
+
+    # ── Step 1: Primary extraction ─────────────────────────────────────
     if VISION_PROVIDER == "groq":
         raw_text = await _extract_groq(image_bytes, lang)
+        actual_provider = "groq_vision" if raw_text else "none"
     elif VISION_PROVIDER == "gemini":
         raw_text = await _extract_gemini(image_bytes, lang)
+        actual_provider = "gemini" if raw_text else "none"
     elif VISION_PROVIDER == "tesseract":
         raw_text = await _extract_tesseract(image_bytes, lang)
+        actual_provider = "tesseract" if raw_text else "none"
     else:
         logger.error(f"Unknown VISION_PROVIDER: {VISION_PROVIDER}")
         return None
 
-    if raw_text:
-        cleaned = clean_extracted_text(raw_text)
-        logger.info(f"Cleaned text ({len(raw_text)} → {len(cleaned)} chars)")
+    # ── Step 2: Local OCR fallback ─────────────────────────────────────
+    if not raw_text:
+        logger.warning(f"[vision] Primary provider ({VISION_PROVIDER}) returned nothing — trying local OCR")
+        try:
+            from local_ocr import extract_with_local_ocr
+            raw_text = await extract_with_local_ocr(image_bytes, lang=lang)
+            actual_provider = "local_ocr"
+        except ImportError:
+            logger.warning("[vision] local_ocr.py not found — no fallback available")
+
+    if not raw_text:
+        logger.warning("[vision] All OCR methods returned empty")
+        return None
+
+    # ── Step 3: Clean text ─────────────────────────────────────────────
+    cleaned = clean_extracted_text(raw_text)
+    logger.info(f"[vision] Cleaned: {len(raw_text)} → {len(cleaned)} chars, provider={actual_provider}")
+
+    # ── Step 4: Confidence scoring ─────────────────────────────────────
+    try:
+        from confidence_scorer import score_ocr_confidence
+        conf_result = score_ocr_confidence(cleaned, source=actual_provider)
+        logger.info(
+            f"[vision] Confidence: {conf_result.score:.2f} ({conf_result.tier}), "
+            f"signals={conf_result.signals[:3]}"
+        )
+        if conf_result.ask_retype:
+            logger.warning(f"[vision] Low confidence={conf_result.score:.2f} — returning None")
+            return None
+        if conf_result.ask_confirm:
+            return f"__MEDIUM_CONF__{cleaned}"
         return cleaned
-    return None
+    except ImportError:
+        # confidence_scorer.py not yet deployed — pass through
+        return cleaned
 
 
 async def extract_question_structured(

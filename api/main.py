@@ -1,7 +1,15 @@
 """
 main.py — Cikgu AI Kimia FastAPI Application
 =============================================
-Version 3.2.0 — Photo/Vision Support
+Version 3.3.0 — Production Hardening
+
+Patched from v3.2.0:
+  - dispatcher.solve_by_task() (was crashing on startup)
+  - call_llm() uses groq_client (retry + circuit breaker + quota)
+  - chemistry_validator pre/post-solve checks
+  - ParseMode.HTML throughout (Markdown corrupted chemistry units)
+  - quota_guard per-user rate limiting
+  - /api/health shows Groq + OCR quota
 
 Changes in v3.1.0:
   - LLM hanya untuk: (1) explain solver output, (2) teori dengan RAG context
@@ -239,6 +247,8 @@ async def setup_telegram(app_instance):
         import httpx
 
         def format_answer(answer: str, answer_type: str) -> str:
+            # PATCHED v3.3.0 — HTML safe (no more Markdown corruption of chemistry units)
+            import html as _html
             emoji = {"calculation":"🧮","theory":"📚","fallback":"ℹ️"}.get(answer_type,"💬")
             lines = []
             for line in answer.split('\n'):
@@ -246,10 +256,10 @@ async def setup_telegram(app_instance):
                     'Diberi:','Formula:','Pengiraan:','Jawapan:',
                     'Given:','Calculation:','Answer:'
                 )):
-                    lines.append(f"*{line.strip()}*")
+                    lines.append(f"<b>{_html.escape(line.strip())}</b>")
                 else:
-                    lines.append(line)
-            return f"{emoji} *Jawapan Cikgu AI Kimia*\n\n" + '\n'.join(lines)
+                    lines.append(_html.escape(line))
+            return f"{emoji} <b>Jawapan Cikgu AI Kimia</b>\n\n" + '\n'.join(lines)
 
         async def call_api(question: str, session_id: str) -> dict:
             lang = detect_language(question)
@@ -270,17 +280,17 @@ async def setup_telegram(app_instance):
                 InlineKeyboardButton("❓ Bantuan", callback_data="mode_help"),
             ]]
             await update.message.reply_text(
-                "👋 *Selamat datang ke Cikgu AI Kimia!*\n\n"
+                "👋 <b>Selamat datang ke Cikgu AI Kimia!</b>\n\n"
                 "Saya boleh membantu:\n• Pengiraan kimia SPM\n• Teori dan konsep\n"
-                "• Kuiz dan latihan\n\nTaip soalan dalam *BM atau English*.",
-                parse_mode=ParseMode.MARKDOWN,
+                "• Kuiz dan latihan\n\nTaip soalan dalam <b>BM atau English</b>.",
+                parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
 
         async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
-                "📚 *Arahan*\n\n/start /help /quiz /solve /clear /stats",
-                parse_mode=ParseMode.MARKDOWN,
+                "📚 <b>Arahan</b>\n\n/start /help /quiz /solve /clear /stats",
+                parse_mode=ParseMode.HTML,
             )
 
         async def cmd_quiz(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -297,18 +307,18 @@ async def setup_telegram(app_instance):
                 if not questions:
                     await update.message.reply_text(f"Tiada soalan untuk: {topic}")
                     return
-                msg = f"📝 *Kuiz: {topic}*\n\n"
+                msg = f"📝 <b>Kuiz: {topic}</b>\n\n"
                 for i, q in enumerate(questions, 1):
-                    msg += f"*{i}. {q.get('soalan','')}*\n"
+                    msg += f"<b>{i}. {q.get('soalan','')}</b>\n"
                     for opt in q.get('pilihan', []):
                         msg += f"   {opt}\n"
                     msg += f"✅ {q.get('jawapan','')}\n"
                     if q.get('penjelasan'):
-                        msg += f"💡 _{q['penjelasan']}_\n"
+                        msg += f"💡 <i>{q['penjelasan']}</i>\n"
                     msg += "\n"
                 if len(msg) > 4000:
-                    msg = msg[:4000] + "\n_[dipendekkan]_"
-                await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+                    msg = msg[:4000] + "\n<i>[dipendekkan]</i>"
+                await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
             except Exception as e:
                 await update.message.reply_text(f"Ralat: {e}")
 
@@ -327,7 +337,7 @@ async def setup_telegram(app_instance):
                     result = resp.json()
                 if result.get("success"):
                     await update.message.reply_text(
-                        f"🧮 *Pengiraan*\n\n{result['answer']}", parse_mode=ParseMode.MARKDOWN,
+                        f"🧮 *Pengiraan*\n\n{result['answer']}", parse_mode=ParseMode.HTML,
                     )
                 else:
                     await update.message.reply_text(f"❌ {result.get('error','Gagal.')}")
@@ -353,12 +363,12 @@ async def setup_telegram(app_instance):
                     stats = resp.json()
                 cache = stats.get("cache", {})
                 msg = (
-                    f"📊 *Statistik*\n\n"
+                    f"📊 <b>Statistik</b>\n\n"
                     f"👥 Pelajar: {stats.get('total_students',0)}\n"
                     f"💾 Cache: {cache.get('total_cached',0)}\n"
                     f"⚡ Hits: {cache.get('total_cache_hits',0)}\n"
                 )
-                await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+                await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
             except Exception as e:
                 await update.message.reply_text(f"Ralat: {e}")
 
@@ -370,9 +380,9 @@ async def setup_telegram(app_instance):
             elif query.data == "mode_quiz":
                 await query.edit_message_text("Taip: /quiz [topik]")
             elif query.data == "mode_theory":
-                await query.edit_message_text("📚 *Mod Teori*\nTaip soalan.", parse_mode=ParseMode.MARKDOWN)
+                await query.edit_message_text("📚 *Mod Teori*\nTaip soalan.", parse_mode=ParseMode.HTML)
             elif query.data == "mode_calc":
-                await query.edit_message_text("🧮 *Mod Pengiraan*\nContoh: Hitung mol 4g NaOH", parse_mode=ParseMode.MARKDOWN)
+                await query.edit_message_text("🧮 *Mod Pengiraan*\nContoh: Hitung mol 4g NaOH", parse_mode=ParseMode.HTML)
 
         async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """
@@ -392,14 +402,14 @@ async def setup_telegram(app_instance):
                     "📷 *Maaf, sokongan gambar belum aktif.*\n\n"
                     "Sila taip soalan anda dalam teks.\n"
                     "_Contoh: Hitungkan mol 4g NaOH_",
-                    parse_mode=ParseMode.MARKDOWN,
+                    parse_mode=ParseMode.HTML,
                 )
                 return
 
             await update.message.chat.send_action(ChatAction.UPLOAD_PHOTO)
             await update.message.reply_text(
                 "📷 _Gambar diterima. Sedang membaca soalan..._",
-                parse_mode=ParseMode.MARKDOWN,
+                parse_mode=ParseMode.HTML,
             )
 
             try:
@@ -428,7 +438,7 @@ async def setup_telegram(app_instance):
                         "• Pastikan gambar jelas dan tidak kabur\n"
                         "• Cahaya mencukupi\n"
                         "• Atau taip soalan dalam teks terus",
-                        parse_mode=ParseMode.MARKDOWN,
+                        parse_mode=ParseMode.HTML,
                     )
                     return
 
@@ -456,7 +466,7 @@ async def setup_telegram(app_instance):
                 await update.message.reply_text(
                     f"📝 *Soalan yang dikesan:*\n\n`{preview}`\n\n"
                     f"_Sedang mengira jawapan..._",
-                    parse_mode=ParseMode.MARKDOWN,
+                    parse_mode=ParseMode.HTML,
                 )
 
                 # ── Step 5: Solver/RAG pipeline (same as text questions) ──
@@ -537,7 +547,7 @@ SOALAN:
                         "• Taip soalan dalam teks terus\n"
                         "• Satu soalan sahaja dalam satu gambar\n"
                         "• Pastikan soalan ada nilai/data yang lengkap",
-                        parse_mode=ParseMode.MARKDOWN,
+                        parse_mode=ParseMode.HTML,
                     )
                     return
 
@@ -550,9 +560,9 @@ SOALAN:
 
                 if len(formatted) > 4096:
                     for chunk in [formatted[i:i+4000] for i in range(0, len(formatted), 4000)]:
-                        await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+                        await update.message.reply_text(chunk, parse_mode=ParseMode.HTML)
                 else:
-                    await update.message.reply_text(formatted, parse_mode=ParseMode.MARKDOWN)
+                    await update.message.reply_text(formatted, parse_mode=ParseMode.HTML)
 
             except Exception as e:
                 logger.error(f"Photo handler error: {e}")
@@ -583,9 +593,9 @@ SOALAN:
 
                 if len(formatted) > 4096:
                     for chunk in [formatted[i:i+4000] for i in range(0, len(formatted), 4000)]:
-                        await update.message.reply_text(chunk, parse_mode=ParseMode.MARKDOWN)
+                        await update.message.reply_text(chunk, parse_mode=ParseMode.HTML)
                 else:
-                    await update.message.reply_text(formatted, parse_mode=ParseMode.MARKDOWN)
+                    await update.message.reply_text(formatted, parse_mode=ParseMode.HTML)
             except Exception as e:
                 logger.error(f"Bot error: {e}")
                 await update.message.reply_text("Maaf, ralat berlaku. Sila cuba lagi.")
@@ -626,7 +636,7 @@ async def lifespan(app: FastAPI):
         from embedder import get_embedder
         from retriever import get_retriever
         from router import route
-        from solver_engine import solve_by_task
+        from dispatcher import solve_by_task   # PATCHED v3.3.0
         _app_state["embedder"]  = get_embedder()
         _app_state["retriever"] = get_retriever(index_dir=INDEX_DIR, score_threshold=SCORE_THRESHOLD)
         _app_state["route_fn"]  = route
@@ -635,6 +645,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Component load failed: {e}")
         _app_state["error"] = str(e)
+
+    # PATCHED v3.3.0 — quota guard for per-user rate limiting
+    try:
+        from quota_guard import get_quota_guard
+        _app_state["quota_guard"] = get_quota_guard()
+        logger.info("Quota guard: OK")
+    except ImportError:
+        logger.warning("quota_guard.py not found — running without quota protection")
 
     await setup_telegram(app)
     yield
@@ -711,27 +729,34 @@ async def call_llm(
     model: Optional[str] = None,
 ) -> str:
     """
-    Call Groq LLM with specified model.
-    If model not specified, uses GROQ_MODEL (70b for theory).
-    Use GROQ_EXPLAIN_MODEL (8b) for solver explanations.
+    PATCHED v3.3.0 — Hardened Groq call via groq_client.py.
+    Uses retry (3x), circuit breaker, daily quota tracking, async semaphore.
+    Falls back to direct call if groq_client.py not yet deployed.
+    Returns empty string on failure — solver answer shown without explanation.
     """
-    groq_key = os.environ.get("GROQ_API_KEY", "")
-    # Use provided model, else fall back to env var
-    use_model = model or GROQ_MODEL
-    if groq_key:
-        try:
-            from groq import AsyncGroq
-            client = AsyncGroq(api_key=groq_key)
-            resp = await client.chat.completions.create(
-                model=use_model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-                temperature=0.1,
-            )
-            return resp.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Groq error (model={use_model}): {e}")
-    return ""
+    try:
+        from groq_client import call_llm as _groq_call
+        use_model = model or GROQ_MODEL
+        result = await _groq_call(prompt, model=use_model, max_tokens=max_tokens)
+        return result or ""
+    except ImportError:
+        # groq_client.py not yet deployed — use direct call as fallback
+        groq_key  = os.environ.get("GROQ_API_KEY", "")
+        use_model = model or GROQ_MODEL
+        if groq_key:
+            try:
+                from groq import AsyncGroq
+                client = AsyncGroq(api_key=groq_key)
+                resp = await client.chat.completions.create(
+                    model=use_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=max_tokens,
+                    temperature=0.1,
+                )
+                return resp.choices[0].message.content
+            except Exception as e:
+                logger.error(f"Groq error (model={use_model}): {e}")
+        return ""
 
 
 async def answer_question(req: ChatRequest) -> ChatResponse:
@@ -790,9 +815,36 @@ async def answer_question(req: ChatRequest) -> ChatResponse:
 
     # ── PATH 1: CALCULATION ───────────────────────────────────────────────
     if task != "unknown" and data is not None:
+
+        # PATCHED v3.3.0 — pre-solve chemistry validation
+        cv = None
         try:
-            solver_answer = solve_fn(task, data)
+            from chemistry_validator import ChemistryValidator
+            cv         = ChemistryValidator()
+            pre_report = cv.validate_extraction(task, data)
+            if pre_report.has_critical:
+                for issue in pre_report.criticals:
+                    logger.warning(f"Pre-solve validation task={task}: {issue.code} — {issue.message}")
+        except ImportError:
+            pass  # chemistry_validator.py not yet deployed
+
+        try:
+            solver_result = solve_fn(task, data)
             solver_used   = True
+
+            # PATCHED v3.3.0 — post-solve sanity check
+            if cv and isinstance(solver_result, dict):
+                post_report = cv.validate_answer(task, solver_result)
+                if post_report.has_critical:
+                    for issue in post_report.criticals:
+                        logger.error(f"Post-solve SANITY FAIL task={task}: {issue.code} — {issue.message}")
+                    final_answer = fallback_message(lang, "solver_fail")
+                    answer_type  = "fallback"
+
+            # solver_result is a string from dispatcher or a dict from legacy solvers
+            solver_answer = (solver_result.get("answer")
+                             if isinstance(solver_result, dict)
+                             else str(solver_result))
 
             rag_results = retriever.retrieve(
                 query=req.question, k=2,
@@ -903,8 +955,28 @@ async def health():
         index_stats = {"error":"could not read stats"}
     # Add vision info
     components["vision"] = f"{vision_provider_info().get('provider','none')} ({'ok' if vision_is_enabled() else 'disabled'})"
-    overall = "ok" if all(v in ("ok", "not loaded") or "ok" in v for v in components.values()) else "degraded"
-    return HealthResponse(status=overall, components=components, index_stats=index_stats)
+    # PATCHED v3.3.0 — show Groq and OCR quota in health check
+    groq_quota = {}
+    ocr_quota  = {}
+    try:
+        from groq_client import quota_status
+        groq_quota = quota_status()
+    except ImportError:
+        pass
+    try:
+        from quota_guard import get_quota_guard
+        ocr_quota = get_quota_guard().status()
+    except ImportError:
+        pass
+
+    overall = "ok" if all(v in ("ok", "not loaded") or "ok" in str(v) for v in components.values()) else "degraded"
+    return {
+        "status":      overall,
+        "components":  components,
+        "index_stats": index_stats,
+        "groq_quota":  groq_quota,
+        "ocr_quota":   ocr_quota,
+    }
 
 @app.get("/api/memory/stats", tags=["Memory"])
 async def memory_stats():

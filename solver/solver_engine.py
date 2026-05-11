@@ -1,1048 +1,1223 @@
-"""
-╔══════════════════════════════════════════════════════════════════════════════╗
-║  solver_engine_v340.py — Cikgu AI Kimia v3.4.0                            ║
-║                                                                              ║
-║  FAIL GABUNGAN PENUH — sedia untuk merge ke solver/solver_engine.py        ║
-║                                                                              ║
-║  KANDUNGAN:                                                                  ║
-║  1. calculate_molar_mass()    — JMR universal (mudah, kompleks, hidrat)    ║
-║  2. solve_moles_from_mass()   — mol dari jisim                             ║
-║  3. solve_moles_from_volume() — mol dari isipadu gas (RTP/STP)             ║
-║  4. solve_stoichiometry()     — UNIVERSAL: 6 jenis input × 2 jenis output  ║
-║  5. solve_thermochemistry()   — forward (ΔH) + reverse (ΔT) [BARU]        ║
-║  6. solve_ph_universal()      — dari H⁺ atau OH⁻ [IMPROVED]               ║
-║  7. solve_titration()         — nisbah mol mana-mana [FIXED]              ║
-║  8. solve_concentration()     — g/dm³ DAN mol/dm³ [FIXED]                 ║
-║  9. solve_dilution()          — M1V1=M2V2 [FIXED]                         ║
-║  10. solve_voltaic_cell()     — E0 sel                                     ║
-║  11. solve_molarity_from_dh() — kemolaran dari ΔH [FIXED]                 ║
-║  12. solve_empirical_formula()— formula empirik (% atau jisim)             ║
-║  13. solve_rate_of_reaction() — kadar purata                               ║
-║  14. solve_atomic_structure() — proton/neutron/elektron                    ║
-║  15. solve_relative_ar()      — Ar dari isotop                             ║
-║  16. solve_oxidation_number() — nombor pengoksidaan                        ║
-║  17. solve_mass_from_molarity()— jisim untuk buat larutan                  ║
-║                                                                              ║
-║  CARA GUNA:                                                                  ║
-║  1. Salin fail ini ke solver/solver_engine.py (gantikan terus)             ║
-║  2. Atau import fungsi yang diperlukan sahaja                               ║
-║                                                                              ║
-║  TESTED AGAINST:                                                             ║
-║  - Johor 2021 K1 + K2                                                      ║
-║  - Terengganu 2021 K1                                                      ║
-║  - Stress test 66 soalan (target: 90%+ pass rate)                         ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-"""
-
 import math
 import re
-from typing import Optional
+from typing import Dict, List, Optional, Any
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONSTANTS
-# ─────────────────────────────────────────────────────────────────────────────
+from formula_parser import molar_mass, parse_formula, ATOMIC_MASS
+from equation_parser import get_ratio
+from units import cm3_to_dm3, dm3_to_cm3, j_to_kj
 
-AR = {
-    "H":1.0,"He":4.0,"Li":7.0,"Be":9.0,"B":10.8,"C":12.0,"N":14.0,
-    "O":16.0,"F":19.0,"Ne":20.0,"Na":23.0,"Mg":24.0,"Al":27.0,"Si":28.0,
-    "P":31.0,"S":32.0,"Cl":35.5,"Ar":40.0,"K":39.0,"Ca":40.0,"Sc":45.0,
-    "Ti":48.0,"V":51.0,"Cr":52.0,"Mn":55.0,"Fe":56.0,"Co":59.0,"Ni":58.7,
-    "Cu":63.5,"Zn":65.0,"Ga":70.0,"Ge":72.6,"As":75.0,"Se":79.0,"Br":80.0,
-    "Kr":84.0,"Rb":85.5,"Sr":88.0,"Y":89.0,"Zr":91.0,"Ag":108.0,"Sn":118.7,
-    "I":127.0,"Ba":137.0,"Pb":207.0,"Hg":200.6,
-}
-
-VM_RTP  = 24.0   # dm³/mol — Room Temperature & Pressure
-VM_STP  = 22.4   # dm³/mol — Standard Temperature & Pressure
-C_WATER = 4.2    # J g⁻¹ °C⁻¹
-NA      = 6.02e23
-
-# BM stopwords — jangan parse sebagai formula kimia
-BM_STOPWORDS = {
-    "berapa","hitung","hitungkan","tentukan","kira","kirakan","apakah",
-    "berapakah","nyatakan","sebatian","larutan","jisim","isipadu","bila",
-    "apabila","dalam","untuk","dengan","kepada","daripada","antara",
-    "calculate","find","determine","what","which","how","the","of","in",
-}
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPER: MOLAR MASS
-# ─────────────────────────────────────────────────────────────────────────────
-
-def calculate_molar_mass(formula: str, ar_override: dict = None) -> Optional[float]:
-    """
-    Kira jisim molar dari formula kimia.
-    Support: NaOH, Al2(SO4)3, CuSO4.5H2O, K4Fe(CN)6.3H2O, Cu(NO3)2
-
-    ar_override: dict Ar custom dari soalan, contoh {"Cu": 64, "N": 14}
-                 Penting bila soalan beri Ar berbeza dari standard
-    """
-    if not formula:
-        return None
-
-    # Guna Ar custom jika ada (untuk soalan yang beri Ar spesifik)
-    ar_table = dict(AR)
-    if ar_override:
-        ar_table.update(ar_override)
-
-    formula = formula.strip()
-
-    def parse_chunk(s: str) -> float:
-        total = 0.0
-        i = 0
-        while i < len(s):
-            if s[i] == '(':
-                depth, j = 1, i + 1
-                while j < len(s) and depth > 0:
-                    if s[j] == '(': depth += 1
-                    elif s[j] == ')': depth -= 1
-                    j += 1
-                inner = s[i+1:j-1]
-                k = j
-                num_str = ""
-                while k < len(s) and (s[k].isdigit() or s[k] == '.'):
-                    num_str += s[k]; k += 1
-                mult = float(num_str) if num_str else 1.0
-                sub = parse_chunk(inner)
-                if sub < 0: return -1.0
-                total += sub * mult
-                i = k
-            elif s[i].isupper():
-                j = i + 1
-                while j < len(s) and s[j].islower(): j += 1
-                elem = s[i:j]
-                k = j
-                num_str = ""
-                while k < len(s) and (s[k].isdigit() or s[k] == '.'):
-                    num_str += s[k]; k += 1
-                count = float(num_str) if num_str else 1.0
-                if elem not in ar_table: return -1.0
-                total += ar_table[elem] * count
-                i = k
-            else:
-                i += 1
-        return total
-
-    total_mass = 0.0
-    parts = formula.split('.')
-    for part in parts:
-        part = part.strip()
-        if not part: continue
-        m = re.match(r'^(\d+(?:\.\d+)?)([A-Za-z].*)$', part)
-        if m:
-            mult = float(m.group(1))
-            sub = parse_chunk(m.group(2))
-            if sub < 0: return None
-            total_mass += sub * mult
-        else:
-            sub = parse_chunk(part)
-            if sub < 0: return None
-            total_mass += sub
-
-    return round(total_mass, 2) if total_mass > 0 else None
+NA = 6.02e23
+VM_ROOM = 24.0
+VM_STP = 22.4
+C_WATER = 4.2
 
 
-def _vm(condition: str) -> float:
-    """Isipadu molar berdasarkan keadaan."""
-    c = condition.upper()
-    if any(x in c for x in ("STP","PIAWAI","STANDARD")):
+# =====================================
+# OUTPUT FORMATTERS
+# =====================================
+def fmt_num(x: float, dp: int = 3) -> str:
+    if abs(x) >= 1e4 or (abs(x) > 0 and abs(x) < 1e-3):
+        return f"{x:.{dp}e}"
+    s = f"{x:.{dp}f}"
+    return s.rstrip("0").rstrip(".")
+
+
+def spm_format(diberi: List[str], formula: List[str], pengiraan: List[str], jawapan: List[str]) -> str:
+    parts: List[str] = []
+    if diberi:
+        parts.append("Diberi:\n" + "\n".join(diberi))
+    if formula:
+        parts.append("Formula:\n" + "\n".join(formula))
+    if pengiraan:
+        parts.append("Pengiraan:\n" + "\n".join(pengiraan))
+    if jawapan:
+        parts.append("Jawapan:\n" + "\n".join(jawapan))
+    return "\n\n".join(parts)
+
+
+# =====================================
+# HELPERS
+# =====================================
+def get_vm(condition: Optional[str] = None) -> float:
+    if not condition:
+        return VM_ROOM
+    c = condition.strip().lower()
+    if c in {"stp", "standard"}:
         return VM_STP
-    return VM_RTP  # default RTP/bilik/room
+    return VM_ROOM
 
 
-def _spm_format(diberi, formula, pengiraan, jawapan, lang="BM") -> str:
-    """Format jawapan dalam format SPM standard."""
-    if lang == "BM":
-        return (
-            "🧮 Jawapan Cikgu AI Kimia\n\n"
-            f"Diberi:\n" + "\n".join(f"  {x}" for x in diberi) + "\n\n"
-            f"Formula:\n" + "\n".join(f"  {x}" for x in formula) + "\n\n"
-            f"Pengiraan:\n" + "\n".join(f"  {x}" for x in pengiraan) + "\n\n"
-            f"Jawapan:\n" + "\n".join(f"  {x}" for x in jawapan)
-        )
-    else:
-        return (
-            "🧮 Cikgu AI Kimia Answer\n\n"
-            f"Given:\n" + "\n".join(f"  {x}" for x in diberi) + "\n\n"
-            f"Formula:\n" + "\n".join(f"  {x}" for x in formula) + "\n\n"
-            f"Calculation:\n" + "\n".join(f"  {x}" for x in pengiraan) + "\n\n"
-            f"Answer:\n" + "\n".join(f"  {x}" for x in jawapan)
-        )
+def condition_label(condition: Optional[str], vm: Optional[float] = None) -> str:
+    if condition:
+        c = condition.strip().upper()
+        if c == "ROOM":
+            return "RTP"
+        return c
+    if vm == VM_STP:
+        return "STP"
+    return "RTP"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 1: MOL DARI JISIM
-# ─────────────────────────────────────────────────────────────────────────────
+def _pick_formula(data: Dict[str, Any], key: str = "formula") -> Optional[str]:
+    value = data.get(key)
+    if value:
+        return value
+    formulas = data.get("formulas") or []
+    return formulas[0] if formulas else None
 
-def solve_moles_from_mass(formula: str, mass_g: float, lang="BM") -> dict:
-    """n = m ÷ M"""
+
+def _pick_target_formula(data: Dict[str, Any]) -> Optional[str]:
+    if data.get("target_formula"):
+        return data["target_formula"]
+    formulas = data.get("formulas") or []
+    return formulas[1] if len(formulas) >= 2 else None
+
+
+def _charge_from_species(species: str, explicit_charge: Optional[int] = None) -> int:
+    if explicit_charge is not None:
+        return explicit_charge
+    s = species.strip()
+    if s.endswith("+"):
+        m = re.search(r"(\d*)\+$", s)
+        return int(m.group(1)) if m and m.group(1) else 1
+    if s.endswith("-"):
+        m = re.search(r"(\d*)-$", s)
+        return -(int(m.group(1)) if m and m.group(1) else 1)
+    return 0
+
+
+# =====================================
+# CHAPTER 2 / 3 CORE SOLVERS
+# =====================================
+def solve_jmr(formula_str: str) -> str:
+    parsed = parse_formula(formula_str.replace(".", "·").split("·")[0])
+    M = molar_mass(formula_str)
+    terms = []
+    for el, count in parsed.items():
+        if count > 1:
+            terms.append(f"{count}({ATOMIC_MASS[el]})")
+        else:
+            terms.append(f"{ATOMIC_MASS[el]}")
+    return spm_format(
+        diberi=[f"Formula = {formula_str}"] + [f"{el} = {ATOMIC_MASS[el]}" for el in parsed],
+        formula=["JMR = jumlah (bilangan atom × Ar)"],
+        pengiraan=[f"JMR = {' + '.join(terms)}", f"JMR = {fmt_num(M, 2)}"],
+        jawapan=[f"JMR = {fmt_num(M, 2)}"],
+    )
+
+
+def solve_moles_from_mass(mass_g: float, formula_str: str) -> str:
+    M = molar_mass(formula_str)
+    n = mass_g / M
+    return spm_format(
+        diberi=[f"m = {fmt_num(mass_g, 3)} g", f"Formula = {formula_str}", f"M = {fmt_num(M, 2)} g mol⁻¹"],
+        formula=["n = m ÷ M"],
+        pengiraan=[f"n = {fmt_num(mass_g, 3)} ÷ {fmt_num(M, 2)}", f"n = {fmt_num(n, 3)} mol"],
+        jawapan=[f"Bilangan mol = {fmt_num(n, 3)} mol"],
+    )
+
+
+# =====================================
+# FIX BUG #1 — MULTI-FORMULA MOL
+# =====================================
+def solve_moles_multi(formulas: List[str], masses: List[float]) -> str:
+    """
+    Handle multi-formula "jumlah mol" questions.
+    e.g. "5.6g N2 dan 3.2g O2 — hitungkan jumlah bilangan mol gas"
+    """
+    if not formulas or not masses or len(formulas) != len(masses):
+        raise ValueError("Senarai formula dan jisim tidak sepadan.")
+
+    lines_diberi: List[str] = []
+    lines_calc: List[str] = []
+    lines_jawapan: List[str] = []
+    total_moles = 0.0
+
+    for formula, mass in zip(formulas, masses):
+        M = molar_mass(formula)
+        n = mass / M
+        total_moles += n
+        lines_diberi.append(f"{formula}: m = {fmt_num(mass, 3)} g,  M = {fmt_num(M, 2)} g mol⁻¹")
+        lines_calc.append(f"n({formula}) = {fmt_num(mass, 3)} ÷ {fmt_num(M, 2)} = {fmt_num(n, 4)} mol")
+        lines_jawapan.append(f"n({formula}) = {fmt_num(n, 4)} mol")
+
+    individual = " + ".join(
+        fmt_num(mass / molar_mass(f), 4) for f, mass in zip(formulas, masses)
+    )
+    lines_calc.append(f"Jumlah mol = {individual}")
+    lines_calc.append(f"Jumlah mol = {fmt_num(total_moles, 4)} mol")
+    lines_jawapan.append(f"Jumlah bilangan mol = {fmt_num(total_moles, 4)} mol")
+
+    return spm_format(
+        diberi=lines_diberi,
+        formula=["n = m ÷ M  (dikira untuk setiap komponen)"],
+        pengiraan=lines_calc,
+        jawapan=lines_jawapan,
+    )
+
+
+def solve_moles_from_volume(volume_dm3: float, condition: Optional[str] = None) -> str:
+    vm = get_vm(condition)
+    n = volume_dm3 / vm
+    label = condition_label(condition, vm)
+    return spm_format(
+        diberi=[f"V = {fmt_num(volume_dm3, 3)} dm³", f"Keadaan = {label}", f"Vm = {vm} dm³ mol⁻¹"],
+        formula=["n = V ÷ Vm"],
+        pengiraan=[f"n = {fmt_num(volume_dm3, 3)} ÷ {vm}", f"n = {fmt_num(n, 3)} mol"],
+        jawapan=[f"Bilangan mol = {fmt_num(n, 3)} mol"],
+    )
+
+
+def solve_particles_from_moles(moles: float) -> str:
+    particles = moles * NA
+    return spm_format(
+        diberi=[f"n = {fmt_num(moles, 3)} mol", f"NA = {NA:.2e} mol⁻¹"],
+        formula=["Bilangan zarah = n × NA"],
+        pengiraan=[f"Bilangan zarah = {fmt_num(moles, 3)} × {NA:.2e}", f"Bilangan zarah = {particles:.3e}"],
+        jawapan=[f"Bilangan zarah = {particles:.3e}"],
+    )
+
+
+def solve_volume_from_moles(moles: float, condition: Optional[str] = None) -> str:
+    vm = get_vm(condition)
+    volume = moles * vm
+    label = condition_label(condition, vm)
+    return spm_format(
+        diberi=[f"n = {fmt_num(moles, 3)} mol", f"Keadaan = {label}", f"Vm = {vm} dm³ mol⁻¹"],
+        formula=["V = n × Vm"],
+        pengiraan=[f"V = {fmt_num(moles, 3)} × {vm}", f"V = {fmt_num(volume, 3)} dm³"],
+        jawapan=[f"Isipadu gas = {fmt_num(volume, 3)} dm³"],
+    )
+
+
+def solve_mass_from_moles(moles: float, formula_str: str) -> str:
+    M = molar_mass(formula_str)
+    mass_g = moles * M
+    return spm_format(
+        diberi=[f"n = {fmt_num(moles, 3)} mol", f"Formula = {formula_str}", f"M = {fmt_num(M, 2)} g mol⁻¹"],
+        formula=["m = n × M"],
+        pengiraan=[f"m = {fmt_num(moles, 3)} × {fmt_num(M, 2)}", f"m = {fmt_num(mass_g, 3)} g"],
+        jawapan=[f"Jisim = {fmt_num(mass_g, 3)} g"],
+    )
+
+
+def solve_particles_from_volume(volume_dm3: float, condition: Optional[str] = None) -> str:
+    vm = get_vm(condition)
+    n = volume_dm3 / vm
+    particles = n * NA
+    label = condition_label(condition, vm)
+    return spm_format(
+        diberi=[f"V = {fmt_num(volume_dm3, 3)} dm³", f"Keadaan = {label}", f"Vm = {vm} dm³ mol⁻¹", f"NA = {NA:.2e} mol⁻¹"],
+        formula=["n = V ÷ Vm", "Bilangan zarah = n × NA"],
+        pengiraan=[f"n = {fmt_num(volume_dm3, 3)} ÷ {vm}", f"n = {fmt_num(n, 3)} mol", f"Bilangan zarah = {fmt_num(n, 3)} × {NA:.2e}", f"Bilangan zarah = {particles:.3e}"],
+        jawapan=[f"Bilangan zarah = {particles:.3e}"],
+    )
+
+
+def solve_particles_from_mass(mass_g: float, formula_str: str) -> str:
+    M = molar_mass(formula_str)
+    n = mass_g / M
+    particles = n * NA
+    return spm_format(
+        diberi=[f"m = {fmt_num(mass_g, 3)} g", f"Formula = {formula_str}", f"M = {fmt_num(M, 2)} g mol⁻¹", f"NA = {NA:.2e} mol⁻¹"],
+        formula=["n = m ÷ M", "Bilangan zarah = n × NA"],
+        pengiraan=[f"n = {fmt_num(mass_g, 3)} ÷ {fmt_num(M, 2)}", f"n = {fmt_num(n, 3)} mol", f"Bilangan zarah = {fmt_num(n, 3)} × {NA:.2e}", f"Bilangan zarah = {particles:.3e}"],
+        jawapan=[f"Bilangan zarah = {particles:.3e}"],
+    )
+
+
+# Atoms per molecule for common gases
+ATOMS_PER_MOLECULE = {
+    "Ne": 1, "Ar": 1, "He": 1, "Kr": 1, "Xe": 1,  # monoatomik
+    "H2": 2, "N2": 2, "O2": 2, "F2": 2, "Cl2": 2, "Br2": 2, "I2": 2,  # diatomik
+    "O3": 3, "SO2": 3, "NO2": 3, "CO2": 3, "H2S": 3, "HCl": 2, "HF": 2,  # triatomik
+    "SO3": 4, "NH3": 4, "H2O": 3, "NO": 2,  # 4 atom
+    "CH4": 5, "C2H2": 4, "C2H4": 6, "C2H6": 8, "C3H8": 11,
+}
+
+
+def _atoms_per_molecule(formula: str) -> int:
+    """Count total atoms in one molecule from formula string."""
+    # Check lookup table first
+    if formula in ATOMS_PER_MOLECULE:
+        return ATOMS_PER_MOLECULE[formula]
+    # Parse formula to count atoms
     try:
-        M = calculate_molar_mass(formula)
-        if not M:
-            return {"error": f"Tidak kenal formula: {formula}"}
-        n = mass_g / M
-        answer = _spm_format(
-            diberi=[f"m = {mass_g} g", f"Formula = {formula}", f"M = {M} g mol⁻¹"],
-            formula=["n = m ÷ M"],
-            pengiraan=[f"n = {mass_g} ÷ {M}", f"n = {round(n,4)} mol"],
-            jawapan=[f"Bilangan mol = {round(n,4)} mol"],
-            lang=lang
+        parsed = parse_formula(formula)
+        return sum(parsed.values())
+    except Exception:
+        return 1
+
+
+def solve_mol_atoms_from_gas(
+    options: List[Dict],
+    target_mol_atoms: float,
+    condition: Optional[str] = None,
+    volume_dm3: Optional[float] = None,
+) -> str:
+    """
+    Q4 SPM: Which gas contains X mol of ATOMS at RTP?
+    e.g. "Which contains 0.6 mol atoms? A) 4.8dm3 Ne B) 4.8dm3 N2 C) 4.8dm3 SO3 D) 4.8dm3 CO2"
+
+    Logic:
+    1. For each option: n_mol = V / Vm
+    2. atoms_per_molecule = count from formula
+    3. mol_atoms = n_mol × atoms_per_molecule
+    4. Find which gives target_mol_atoms
+    """
+    vm = get_vm(condition)
+    label = condition_label(condition, vm)
+    lines = []
+    answer_letter = None
+    answer_formula = None
+
+    for opt in options:
+        letter = opt.get("letter", "?")
+        formula = opt.get("formula", "?")
+        vol = opt.get("volume_dm3", volume_dm3 or 0)
+        n_mol = vol / vm
+        n_atoms_per = _atoms_per_molecule(formula)
+        mol_atoms = n_mol * n_atoms_per
+        lines.append(
+            f"{letter}) {formula}: n = {fmt_num(vol,2)} ÷ {vm} = {fmt_num(n_mol,3)} mol × {n_atoms_per} atom = {fmt_num(mol_atoms,3)} mol atom"
         )
-        return {"answer": answer, "n_mol": round(n,4), "task": "moles_from_mass"}
-    except Exception as e:
-        return {"error": str(e)}
+        if abs(mol_atoms - target_mol_atoms) < 0.001:
+            answer_letter = letter
+            answer_formula = formula
+
+    if not answer_letter:
+        answer_letter = "?"
+        answer_formula = "Tiada pilihan yang tepat"
+
+    return spm_format(
+        diberi=[
+            f"Isipadu molar = {vm} dm³ mol⁻¹",
+            f"Keadaan = {label}",
+            f"Sasaran = {fmt_num(target_mol_atoms, 2)} mol atom",
+        ],
+        formula=["n = V ÷ Vm", "mol atom = n × bilangan atom per molekul"],
+        pengiraan=lines,
+        jawapan=[
+            f"Jawapan: {answer_letter} — {answer_formula}",
+            f"Mengandungi {fmt_num(target_mol_atoms, 2)} mol atom",
+        ],
+    )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 2: MOL DARI ISIPADU GAS
-# ─────────────────────────────────────────────────────────────────────────────
-
-def solve_moles_from_volume(volume_cm3: float, condition: str = "RTP", lang="BM") -> dict:
-    """n = V ÷ Vm"""
-    try:
-        vm = _vm(condition)
-        vol_dm3 = volume_cm3 / 1000.0
-        n = vol_dm3 / vm
-        answer = _spm_format(
-            diberi=[f"V = {volume_cm3} cm³ = {vol_dm3} dm³",
-                    f"Keadaan = {condition}", f"Vm = {vm} dm³ mol⁻¹"],
-            formula=["n = V ÷ Vm"],
-            pengiraan=[f"n = {vol_dm3} ÷ {vm}", f"n = {round(n,5)} mol"],
-            jawapan=[f"Bilangan mol = {round(n,5)} mol"],
-            lang=lang
-        )
-        return {"answer": answer, "n_mol": round(n,5), "task": "moles_from_volume"}
-    except Exception as e:
-        return {"error": str(e)}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 3: STOICHIOMETRY — UNIVERSAL (semua 6 jenis input)
-# ─────────────────────────────────────────────────────────────────────────────
+def solve_mass_from_volume(volume_dm3: float, formula_str: str, condition: Optional[str] = None) -> str:
+    vm = get_vm(condition)
+    n = volume_dm3 / vm
+    M = molar_mass(formula_str)
+    mass_g = n * M
+    label = condition_label(condition, vm)
+    return spm_format(
+        diberi=[f"V = {fmt_num(volume_dm3, 3)} dm³", f"Formula = {formula_str}", f"Keadaan = {label}", f"Vm = {vm} dm³ mol⁻¹", f"M = {fmt_num(M, 2)} g mol⁻¹"],
+        formula=["n = V ÷ Vm", "m = n × M"],
+        pengiraan=[f"n = {fmt_num(volume_dm3, 3)} ÷ {vm}", f"n = {fmt_num(n, 3)} mol", f"m = {fmt_num(n, 3)} × {fmt_num(M, 2)}", f"m = {fmt_num(mass_g, 3)} g"],
+        jawapan=[f"Jisim = {fmt_num(mass_g, 3)} g"],
+    )
 
-def solve_stoichiometry(
+
+def solve_volume_from_mass_multistep(mass_g: float, formula_str: str, condition: Optional[str] = None) -> str:
+    M = molar_mass(formula_str)
+    n = mass_g / M
+    vm = get_vm(condition)
+    volume = n * vm
+    label = condition_label(condition, vm)
+    return spm_format(
+        diberi=[f"m = {fmt_num(mass_g, 3)} g", f"Formula = {formula_str}", f"M = {fmt_num(M, 2)} g mol⁻¹", f"Keadaan = {label}", f"Vm = {vm} dm³ mol⁻¹"],
+        formula=["n = m ÷ M", "V = n × Vm"],
+        pengiraan=[f"n = {fmt_num(mass_g, 3)} ÷ {fmt_num(M, 2)}", f"n = {fmt_num(n, 3)} mol", f"V = {fmt_num(n, 3)} × {vm}", f"V = {fmt_num(volume, 3)} dm³"],
+        jawapan=[f"Isipadu gas = {fmt_num(volume, 3)} dm³"],
+    )
+
+
+def solve_stoichiometry_mass_to_volume(equation: str, given_formula: str, given_mass_g: float, target_formula: str, condition: Optional[str] = None) -> str:
+    """
+    FIX Q4/Q5: Stoichiometry where answer is GAS VOLUME not mass.
+    e.g. "14g N2 + 3H2 -> 2NH3, isipadu NH3 pada RTP?"
+    e.g. "5g CaCO3 -> CaO + CO2, isipadu CO2 pada RTP?"
+    """
+    given_M = molar_mass(given_formula)
+    given_n = given_mass_g / given_M
+    ratio = get_ratio(equation, given_formula, target_formula)
+    target_n = given_n * ratio
+    vm = get_vm(condition)
+    target_vol = target_n * vm
+    label = condition_label(condition, vm)
+    return spm_format(
+        diberi=[
+            f"Persamaan = {equation}",
+            f"Jisim {given_formula} = {fmt_num(given_mass_g, 3)} g",
+            f"Keadaan = {label}",
+            f"Vm = {vm} dm\u00b3 mol\u207b\u00b9",
+        ],
+        formula=["n = m \u00f7 M", "Nisbah mol daripada persamaan kimia", "V = n \u00d7 Vm"],
+        pengiraan=[
+            f"M({given_formula}) = {fmt_num(given_M, 2)} g mol\u207b\u00b9",
+            f"n({given_formula}) = {fmt_num(given_mass_g, 3)} \u00f7 {fmt_num(given_M, 2)} = {fmt_num(given_n, 3)} mol",
+            f"Nisbah {given_formula} : {target_formula} = {fmt_num(ratio, 3)}",
+            f"n({target_formula}) = {fmt_num(given_n, 3)} \u00d7 {fmt_num(ratio, 3)} = {fmt_num(target_n, 3)} mol",
+            f"V({target_formula}) = {fmt_num(target_n, 3)} \u00d7 {vm} = {fmt_num(target_vol, 3)} dm\u00b3",
+        ],
+        jawapan=[f"Isipadu {target_formula} = {fmt_num(target_vol, 3)} dm\u00b3"],
+    )
+
+
+def solve_stoichiometry_volume_to_mass(
+    equation: str,
     given_formula: str,
+    given_volume_cm3: float,
     target_formula: str,
-    given_coeff: int = 1,
-    target_coeff: int = 1,
-    # Input — pilih SATU:
-    given_mass_g: float = None,       # Jisim diberi (g)
-    given_mol: float = None,           # Mol diberi terus
-    given_vol_cm3: float = None,       # Isipadu GAS diberi (cm³)
-    given_vol_dm3: float = None,       # Isipadu GAS diberi (dm³)
-    given_molarity: float = None,      # Kemolaran larutan diberi (mol/dm³)
-    given_solution_cm3: float = None,  # Isipadu LARUTAN diberi (cm³)
-    # Output — pilih SATU:
-    want: str = "mass",  # "mass" | "volume_rtp" | "volume_stp" | "volume_dm3"
-    condition: str = "RTP",
-    ar_override: dict = None,  # Ar custom dari soalan, contoh {"Cu": 64}
-    lang: str = "BM",
-) -> dict:
+    condition: Optional[str] = None,
+) -> str:
     """
-    UNIVERSAL stoichiometry solver.
-
-    Contoh penggunaan:
-
-    # Johor Q38: 2.1g C3H6 → jisim H2O
-    solve_stoichiometry("C3H6","H2O",2,6,given_mass_g=2.1,want="mass")
-    → 2.70g ✓
-
-    # Terengganu Q33: 9.2g C2H5OH → isipadu CO2 RTP
-    solve_stoichiometry("C2H5OH","CO2",1,2,given_mass_g=9.2,want="volume_rtp")
-    → 9.6 dm³ ✓
-
-    # Terengganu Q37: 1.3dm³ CO2 → isipadu O2
-    solve_stoichiometry("CO2","O2",6,6,given_vol_dm3=1.3,want="volume_dm3")
-    → 1.3 dm³ ✓
-
-    # Terengganu Q38: 25cm³ 0.5M Na2SO4 → jisim CaSO4
-    solve_stoichiometry("Na2SO4","CaSO4",1,1,
-        given_molarity=0.5,given_solution_cm3=25,want="mass")
-    → 1.70g ✓
-
-    # Bug Fix 3: 0.5 mol KI → jisim PbI2
-    solve_stoichiometry("KI","PbI2",2,1,given_mol=0.5,want="mass")
-    → 115.25g ✓
-
-    # Terengganu Q13: 1.6g CuO → Cu(NO3)2 dengan Cu=64
-    solve_stoichiometry("CuO","Cu(NO3)2",1,1,given_mass_g=1.6,
-        want="mass",ar_override={"Cu":64})
-    → 3.76g ✓
+    Q38, Q39: Stoichiometry where GAS VOLUME is given, MASS is asked.
+    e.g. "120cm³ Cl2 + Fe -> FeCl3, jisim FeCl3?"
+    e.g. "360cm3 CO2 terhasil, jisim butanol?"
     """
-    try:
-        vm = _vm(condition)
-        M_given = calculate_molar_mass(given_formula, ar_override)
-        M_target = calculate_molar_mass(target_formula, ar_override)
-
-        # ── Kira mol bahan diberi ─────────────────────────────────────────
-        input_lines = []
-        calc_lines = []
-
-        if given_mass_g is not None:
-            if not M_given:
-                return {"error": f"Tidak kenal formula: {given_formula}"}
-            n_given = given_mass_g / M_given
-            input_lines = [f"m({given_formula}) = {given_mass_g} g",
-                           f"M({given_formula}) = {M_given} g mol⁻¹"]
-            calc_lines = [f"n({given_formula}) = {given_mass_g} ÷ {M_given} = {round(n_given,5)} mol"]
-
-        elif given_mol is not None:
-            n_given = given_mol
-            input_lines = [f"n({given_formula}) = {given_mol} mol (diberi terus)"]
-
-        elif given_vol_cm3 is not None:
-            vol_dm3 = given_vol_cm3 / 1000
-            n_given = vol_dm3 / vm
-            input_lines = [f"V({given_formula}) = {given_vol_cm3} cm³ = {vol_dm3} dm³",
-                           f"Vm = {vm} dm³ mol⁻¹ ({condition})"]
-            calc_lines = [f"n({given_formula}) = {vol_dm3} ÷ {vm} = {round(n_given,5)} mol"]
-
-        elif given_vol_dm3 is not None:
-            n_given = given_vol_dm3 / vm
-            input_lines = [f"V({given_formula}) = {given_vol_dm3} dm³",
-                           f"Vm = {vm} dm³ mol⁻¹ ({condition})"]
-            calc_lines = [f"n({given_formula}) = {given_vol_dm3} ÷ {vm} = {round(n_given,5)} mol"]
-
-        elif given_molarity is not None and given_solution_cm3 is not None:
-            vol_dm3 = given_solution_cm3 / 1000
-            n_given = given_molarity * vol_dm3
-            input_lines = [f"V({given_formula}) = {given_solution_cm3} cm³ = {vol_dm3} dm³",
-                           f"Kemolaran = {given_molarity} mol dm⁻³"]
-            calc_lines = [f"n({given_formula}) = {given_molarity} × {vol_dm3} = {round(n_given,5)} mol"]
-
-        else:
-            return {"error": "Perlu berikan sekurang-kurangnya satu input: "
-                             "jisim, mol, isipadu gas, atau kemolaran+isipadu larutan"}
-
-        # ── Nisbah mol ───────────────────────────────────────────────────
-        n_target = n_given * (target_coeff / given_coeff)
-        ratio_str = f"{given_coeff}:{target_coeff}"
-
-        calc_lines += [
-            f"Nisbah {given_formula}:{target_formula} = {ratio_str}",
-            f"n({target_formula}) = {round(n_given,5)} × ({target_coeff}/{given_coeff}) = {round(n_target,5)} mol",
-        ]
-
-        # ── Kira output ───────────────────────────────────────────────────
-        if want in ("mass", "jisim"):
-            if not M_target:
-                return {"error": f"Tidak kenal formula: {target_formula}"}
-            result_val = n_target * M_target
-            calc_lines += [f"M({target_formula}) = {M_target} g mol⁻¹",
-                           f"m({target_formula}) = {round(n_target,5)} × {M_target} = {round(result_val,3)} g"]
-            jawapan = [f"Jisim {target_formula} = {round(result_val,3)} g"]
-            unit = "g"
-
-        elif want in ("volume_rtp","volume_stp","volume_dm3","isipadu","volume"):
-            result_val = n_target * vm
-            result_cm3 = result_val * 1000
-            calc_lines += [f"V({target_formula}) = {round(n_target,5)} × {vm} = {round(result_val,4)} dm³"]
-            jawapan = [f"Isipadu {target_formula} = {round(result_val,4)} dm³  "
-                       f"({round(result_cm3,2)} cm³)"]
-            unit = "dm³"
-
-        else:
-            return {"error": f"Jenis output tidak dikenali: {want}"}
-
-        formula_lines = []
-        if given_mass_g is not None:
-            formula_lines.append("n = m ÷ M")
-        elif given_vol_cm3 or given_vol_dm3:
-            formula_lines.append("n = V ÷ Vm")
-        elif given_molarity:
-            formula_lines.append("n = kemolaran × isipadu (dm³)")
-        formula_lines += ["Gunakan nisbah mol dari persamaan kimia",
-                          "m = n × M" if want in ("mass","jisim") else "V = n × Vm"]
-
-        answer = _spm_format(
-            diberi=input_lines + [f"Nisbah mol {given_formula}:{target_formula} = {ratio_str}"],
-            formula=formula_lines,
-            pengiraan=calc_lines,
-            jawapan=jawapan,
-            lang=lang
-        )
-
-        return {
-            "answer": answer,
-            "n_given": round(n_given, 6),
-            "n_target": round(n_target, 6),
-            "result": round(result_val, 4),
-            "unit": unit,
-            "task": "stoichiometry",
-        }
-
-    except Exception as e:
-        return {"error": f"Ralat stoikiometri: {e}"}
+    vm = get_vm(condition)
+    label = condition_label(condition, vm)
+    given_vol_dm3 = given_volume_cm3 / 1000.0
+    given_n = given_vol_dm3 / vm
+    ratio = get_ratio(equation, given_formula, target_formula)
+    target_n = given_n * ratio
+    target_M = molar_mass(target_formula)
+    target_mass = target_n * target_M
+    return spm_format(
+        diberi=[
+            f"Persamaan = {equation}",
+            f"Isipadu {given_formula} = {fmt_num(given_volume_cm3, 3)} cm\u00b3 = {fmt_num(given_vol_dm3, 4)} dm\u00b3",
+            f"Keadaan = {label}",
+            f"Vm = {vm} dm\u00b3 mol\u207b\u00b9",
+        ],
+        formula=[
+            "n = V \u00f7 Vm",
+            "Nisbah mol daripada persamaan kimia",
+            "m = n \u00d7 M",
+        ],
+        pengiraan=[
+            f"n({given_formula}) = {fmt_num(given_vol_dm3, 4)} \u00f7 {vm} = {fmt_num(given_n, 4)} mol",
+            f"Nisbah {given_formula} : {target_formula} = {fmt_num(ratio, 3)}",
+            f"n({target_formula}) = {fmt_num(given_n, 4)} \u00d7 {fmt_num(ratio, 3)} = {fmt_num(target_n, 4)} mol",
+            f"M({target_formula}) = {fmt_num(target_M, 2)} g mol\u207b\u00b9",
+            f"m({target_formula}) = {fmt_num(target_n, 4)} \u00d7 {fmt_num(target_M, 2)} = {fmt_num(target_mass, 3)} g",
+        ],
+        jawapan=[f"Jisim {target_formula} = {fmt_num(target_mass, 3)} g"],
+    )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 4: THERMOCHEMISTRY — FORWARD + REVERSE [BUG FIX 2]
-# ─────────────────────────────────────────────────────────────────────────────
+def solve_voltaic_cell(
+    anode_formula: str,
+    cathode_formula: str,
+    e0_anode: float,
+    e0_cathode: float,
+) -> str:
+    """
+    Q34: Voltaic cell EMF calculation.
+    E0cell = E0katod - E0anod
+    e.g. Zn-Cu cell: E0 = +0.34 - (-0.76) = +1.10V
+    """
+    e0_cell = e0_cathode - e0_anode
+    cell_type = "spontan" if e0_cell > 0 else "tidak spontan"
+    return spm_format(
+        diberi=[
+            f"Anod (-) = {anode_formula}",
+            f"Katod (+) = {cathode_formula}",
+            f"E\u2070 anod ({anode_formula}) = {fmt_num(e0_anode, 2)} V",
+            f"E\u2070 katod ({cathode_formula}) = {fmt_num(e0_cathode, 2)} V",
+        ],
+        formula=["E\u2070sel = E\u2070katod \u2212 E\u2070anod"],
+        pengiraan=[
+            f"E\u2070sel = {fmt_num(e0_cathode, 2)} \u2212 ({fmt_num(e0_anode, 2)})",
+            f"E\u2070sel = {fmt_num(e0_cathode, 2)} + {fmt_num(abs(e0_anode), 2)}" if e0_anode < 0 else "",
+            f"E\u2070sel = {fmt_num(e0_cell, 2)} V",
+        ],
+        jawapan=[
+            f"Voltan sel, E\u2070sel = {fmt_num(e0_cell, 2)} V",
+            f"Sel adalah {cell_type} (E\u2070sel {'> 0' if e0_cell > 0 else '< 0'})",
+        ],
+    )
 
-def solve_thermochemistry(
-    # MODE A (forward): beri ΔT → kira Q dan ΔH
-    delta_T: float = None,
-    volume_cm3_total: float = None,
-    molarity: float = None,
-    mass_solute_g: float = None,
-    molar_mass_solute: float = None,
-    n_mol_given: float = None,
-    # MODE B (reverse — BARU Terengganu Q34): beri Q → kira ΔT
-    Q_joules: float = None,
-    want: str = "delta_H",   # "delta_H" | "delta_T"
-    c: float = C_WATER,
+
+def solve_molarity_from_delta_h(
+    volume1_cm3: float,
+    volume2_cm3: float,
+    delta_t: float,
+    delta_h_kj_mol: float,
     density: float = 1.0,
-    lang: str = "BM",
-) -> dict:
+    specific_heat: float = 4.2,
+) -> str:
     """
-    Thermochemistry solver — dua mod:
-
-    MODE A: Q = mcΔT, ΔH = -(Q kJ)/n
-    MODE B: ΔT = Q/(mc)   ← BARU (Terengganu Q34)
-
-    Johor Q36: 100cm³, ΔT=+10°C, M=2.0 → ΔH=-42 kJ/mol ✓
-    Johor Q5c: 20cm³, ΔT=-11°C, M=2.0 → Q=924J ✓
-    Terengganu Q34: Q=2100J, 50cm³ → ΔT=10°C ✓
+    Q37: Find molarity given ΔH and ΔT.
+    e.g. 25cm3 HNO3 + 25cm3 KOH, ΔT=7°C, ΔH=-57.3 kJ/mol → cari kemolaran
+    Steps:
+    1. Q = mcΔT (total mass = sum of volumes × density)
+    2. mol = Q ÷ |ΔH|
+    3. M = mol ÷ V (volume of ONE solution)
     """
-    try:
-        mass_g = (volume_cm3_total or 0) * density
+    total_vol_cm3 = volume1_cm3 + volume2_cm3
+    total_mass_g = total_vol_cm3 * density
+    q_joules = total_mass_g * specific_heat * delta_t
+    q_kj = q_joules / 1000.0
+    moles = q_kj / abs(delta_h_kj_mol)
+    vol_one_dm3 = volume1_cm3 / 1000.0
+    molarity = moles / vol_one_dm3
+    return spm_format(
+        diberi=[
+            f"Isipadu larutan 1 = {fmt_num(volume1_cm3, 1)} cm\u00b3",
+            f"Isipadu larutan 2 = {fmt_num(volume2_cm3, 1)} cm\u00b3",
+            f"Jumlah isipadu = {fmt_num(total_vol_cm3, 1)} cm\u00b3",
+            f"\u0394T = {fmt_num(delta_t, 2)} \u00b0C",
+            f"\u0394H = {fmt_num(delta_h_kj_mol, 1)} kJ mol\u207b\u00b9",
+            f"c = {specific_heat} J g\u207b\u00b9 \u00b0C\u207b\u00b9",
+            f"Ketumpatan = {density} g cm\u207b\u00b3",
+        ],
+        formula=[
+            "Q = mc\u0394T",
+            "mol = Q \u00f7 |\u0394H|",
+            "M = mol \u00f7 V",
+        ],
+        pengiraan=[
+            f"Jisim larutan = {fmt_num(total_vol_cm3, 1)} \u00d7 {density} = {fmt_num(total_mass_g, 1)} g",
+            f"Q = {fmt_num(total_mass_g, 1)} \u00d7 {specific_heat} \u00d7 {fmt_num(delta_t, 2)} = {fmt_num(q_joules, 1)} J = {fmt_num(q_kj, 3)} kJ",
+            f"mol = {fmt_num(q_kj, 3)} \u00f7 {fmt_num(abs(delta_h_kj_mol), 1)} = {fmt_num(moles, 5)} mol",
+            f"M = {fmt_num(moles, 5)} \u00f7 {fmt_num(vol_one_dm3, 4)} = {fmt_num(molarity, 3)} mol dm\u207b\u00b3",
+        ],
+        jawapan=[f"Kemolaran = {fmt_num(molarity, 3)} mol dm\u207b\u00b3"],
+    )
 
-        # ── MODE B: Beri Q, cari ΔT ──────────────────────────────────────
-        if Q_joules is not None and want == "delta_T":
-            if not mass_g:
-                return {"error": "Perlu isipadu untuk kira ΔT"}
-            dT = Q_joules / (mass_g * c)
-            answer = _spm_format(
-                diberi=[f"Q = {Q_joules} J", f"m = {mass_g} g",
-                        f"c = {c} J g⁻¹ °C⁻¹"],
-                formula=["Q = mcΔT  →  ΔT = Q ÷ (mc)"],
-                pengiraan=[f"ΔT = {Q_joules} ÷ ({mass_g} × {c})",
-                           f"ΔT = {Q_joules} ÷ {mass_g*c}",
-                           f"ΔT = {round(dT,2)} °C"],
-                jawapan=[f"Perubahan suhu, ΔT = {round(dT,2)} °C"],
-                lang=lang
-            )
-            return {"answer": answer, "delta_T": round(dT,2), "task": "thermochemistry_reverse"}
 
-        # ── MODE A: Beri ΔT, kira Q dan ΔH ──────────────────────────────
-        if delta_T is None:
-            return {"error": "Perlu ΔT atau Q"}
-        if not mass_g:
-            return {"error": "Perlu isipadu larutan"}
 
-        Q_J = mass_g * c * abs(delta_T)
-        Q_kJ = Q_J / 1000.0  # BUG FIX 2: MESTI bahagi 1000
+    given_M = molar_mass(given_formula)
+    given_n = given_mass_g / given_M
+    ratio = get_ratio(equation, given_formula, target_formula)
+    target_n = given_n * ratio
+    target_M = molar_mass(target_formula)
+    target_mass = target_n * target_M
+    return spm_format(
+        diberi=[f"Persamaan = {equation}", f"Jisim {given_formula} = {fmt_num(given_mass_g, 3)} g"],
+        formula=["n = m ÷ M", "Nisbah mol daripada persamaan kimia", "m = n × M"],
+        pengiraan=[
+            f"M({given_formula}) = {fmt_num(given_M, 2)} g mol⁻¹",
+            f"n({given_formula}) = {fmt_num(given_mass_g, 3)} ÷ {fmt_num(given_M, 2)} = {fmt_num(given_n, 3)} mol",
+            f"Nisbah {given_formula} : {target_formula} = {fmt_num(ratio, 3)}",
+            f"n({target_formula}) = {fmt_num(given_n, 3)} × {fmt_num(ratio, 3)} = {fmt_num(target_n, 3)} mol",
+            f"M({target_formula}) = {fmt_num(target_M, 2)} g mol⁻¹",
+            f"m({target_formula}) = {fmt_num(target_n, 3)} × {fmt_num(target_M, 2)} = {fmt_num(target_mass, 3)} g",
+        ],
+        jawapan=[f"Jisim {target_formula} = {fmt_num(target_mass, 3)} g"],
+    )
 
-        # Kira mol
-        n_source = ""
-        if n_mol_given:
-            n_mol = n_mol_given
-            n_source = f"n = {n_mol_given} mol (diberi)"
-        elif molarity and volume_cm3_total:
-            half_dm3 = (volume_cm3_total / 2) / 1000
-            n_mol = molarity * half_dm3
-            n_source = f"n = {molarity} × {half_dm3} = {round(n_mol,5)} mol"
-        elif mass_solute_g and molar_mass_solute:
-            n_mol = mass_solute_g / molar_mass_solute
-            n_source = f"n = {mass_solute_g} ÷ {molar_mass_solute} = {round(n_mol,5)} mol"
+
+def solve_empirical_formula(element_masses: Dict[str, float]) -> str:
+    moles: Dict[str, float] = {}
+    for el, mass in element_masses.items():
+        if el not in ATOMIC_MASS:
+            raise ValueError(f"Unsur '{el}' tiada dalam jadual Ar.")
+        moles[el] = mass / ATOMIC_MASS[el]
+
+    smallest = min(moles.values())
+    ratios = {el: val / smallest for el, val in moles.items()}
+    rounded: Dict[str, int] = {}
+    for el, ratio in ratios.items():
+        r = round(ratio)
+        if abs(ratio - r) > 0.15:
+            raise ValueError("Nisbah formula empirik tidak hampir kepada integer mudah.")
+        rounded[el] = int(r)
+
+    formula = "".join(el if rounded[el] == 1 else f"{el}{rounded[el]}" for el in element_masses.keys())
+    pengiraan = []
+    for el, mass in element_masses.items():
+        pengiraan.append(f"Mol {el} = {fmt_num(mass, 3)} ÷ {ATOMIC_MASS[el]} = {fmt_num(moles[el], 3)}")
+    pengiraan.append(f"Bahagi semua dengan mol terkecil = {fmt_num(smallest, 3)}")
+    for el in element_masses.keys():
+        pengiraan.append(f"Nisbah {el} = {fmt_num(ratios[el], 3)} ≈ {rounded[el]}")
+    return spm_format(
+        diberi=[f"Jisim unsur = {element_masses}"],
+        formula=["Mol = jisim ÷ Ar", "Bahagikan semua mol dengan mol terkecil"],
+        pengiraan=pengiraan,
+        jawapan=[f"Formula empirik = {formula}"],
+    )
+
+
+def solve_ar_from_abundance(isotope_masses: List[float], abundances: List[float]) -> str:
+    if len(isotope_masses) != len(abundances) or not isotope_masses:
+        raise ValueError("Data isotop tidak lengkap.")
+    total = sum(m * a for m, a in zip(isotope_masses, abundances))
+    total_abundance = sum(abundances)
+    ar = total / total_abundance
+    terms = [f"({a} × {m})" for m, a in zip(isotope_masses, abundances)]
+    return spm_format(
+        diberi=[f"Jisim isotop = {isotope_masses}", f"Kelimpahan = {abundances}"],
+        formula=["Ar = Σ (Kelimpahan × Jisim isotop) ÷ Jumlah kelimpahan"],
+        pengiraan=[f"Ar = [{' + '.join(terms)}] ÷ {fmt_num(total_abundance, 2)}", f"Ar = {fmt_num(total, 2)} ÷ {fmt_num(total_abundance, 2)}", f"Ar = {fmt_num(ar, 2)}"],
+        jawapan=[f"Jisim atom relatif, Ar = {fmt_num(ar, 2)}"],
+    )
+
+
+def solve_subatomic(A: int, Z: int) -> str:
+    proton = Z
+    electron = Z
+    neutron = A - Z
+    return spm_format(
+        diberi=[f"Nombor nukleon, A = {A}", f"Nombor proton, Z = {Z}"],
+        formula=["Bilangan proton = nombor proton", "Bilangan elektron = nombor proton (atom neutral)", "Bilangan neutron = nombor nukleon − nombor proton"],
+        pengiraan=[f"Proton = {proton}", f"Elektron = {electron}", f"Neutron = {A} − {Z} = {neutron}"],
+        jawapan=[f"Bilangan proton = {proton}", f"Bilangan elektron = {electron}", f"Bilangan neutron = {neutron}"],
+    )
+
+
+# =====================================
+# BAB 6 ACID / BASE / TITRATION
+# =====================================
+def solve_concentration_g_dm3(mass_g: float, volume_cm3: Optional[float] = None, volume_dm3: Optional[float] = None) -> str:
+    if volume_dm3 is None:
+        if volume_cm3 is None:
+            raise ValueError("Perlu beri isipadu dalam cm³ atau dm³.")
+        volume_dm3 = cm3_to_dm3(volume_cm3)
+    conc = mass_g / volume_dm3
+    pengiraan: List[str] = []
+    diberi = [f"Jisim = {fmt_num(mass_g, 3)} g"]
+    if volume_cm3 is not None:
+        diberi.append(f"Isipadu = {fmt_num(volume_cm3, 3)} cm³")
+        pengiraan.append(f"{fmt_num(volume_cm3, 3)} cm³ = {fmt_num(volume_dm3, 3)} dm³")
+    else:
+        diberi.append(f"Isipadu = {fmt_num(volume_dm3, 3)} dm³")
+    pengiraan += [f"Kepekatan = {fmt_num(mass_g, 3)} ÷ {fmt_num(volume_dm3, 3)}", f"Kepekatan = {fmt_num(conc, 3)} g dm⁻³"]
+    return spm_format(
+        diberi=diberi,
+        formula=["Kepekatan (g dm⁻³) = jisim ÷ isipadu"],
+        pengiraan=pengiraan,
+        jawapan=[f"Kepekatan = {fmt_num(conc, 3)} g dm⁻³"],
+    )
+
+
+def solve_molarity_from_mass(mass_g: float, formula_str: str, volume_dm3: float) -> str:
+    M = molar_mass(formula_str)
+    n = mass_g / M
+    molarity = n / volume_dm3
+    return spm_format(
+        diberi=[f"Jisim = {fmt_num(mass_g, 3)} g", f"Formula = {formula_str}", f"Jisim molar = {fmt_num(M, 2)} g mol⁻¹", f"Isipadu = {fmt_num(volume_dm3, 3)} dm³"],
+        formula=["n = m ÷ M", "M = n ÷ V"],
+        pengiraan=[f"n = {fmt_num(mass_g, 3)} ÷ {fmt_num(M, 2)}", f"n = {fmt_num(n, 3)} mol", f"M = {fmt_num(n, 3)} ÷ {fmt_num(volume_dm3, 3)}", f"M = {fmt_num(molarity, 3)} mol dm⁻³"],
+        jawapan=[f"Kemolaran = {fmt_num(molarity, 3)} mol dm⁻³"],
+    )
+
+
+def solve_mass_from_molarity(molarity: float, volume_dm3: float, formula_str: str) -> str:
+    """
+    FIX BUG #10: "Berapakah jisim X untuk membuat Y dm3 larutan Z mol dm-3?"
+    Reverse of molarity_from_mass.
+    """
+    M = molar_mass(formula_str)
+    n = molarity * volume_dm3
+    mass_g = n * M
+    volume_cm3 = dm3_to_cm3(volume_dm3)
+    return spm_format(
+        diberi=[
+            f"Kemolaran = {fmt_num(molarity, 3)} mol dm\u207b\u00b3",
+            f"Isipadu = {fmt_num(volume_cm3, 2)} cm\u00b3 = {fmt_num(volume_dm3, 3)} dm\u00b3",
+            f"Formula = {formula_str}",
+            f"Jisim molar = {fmt_num(M, 2)} g mol\u207b\u00b9",
+        ],
+        formula=["n = M \u00d7 V", "m = n \u00d7 Mr"],
+        pengiraan=[
+            f"n = {fmt_num(molarity, 3)} \u00d7 {fmt_num(volume_dm3, 3)}",
+            f"n = {fmt_num(n, 3)} mol",
+            f"m = {fmt_num(n, 3)} \u00d7 {fmt_num(M, 2)}",
+            f"m = {fmt_num(mass_g, 3)} g",
+        ],
+        jawapan=[f"Jisim {formula_str} = {fmt_num(mass_g, 3)} g"],
+    )
+
+
+def solve_dilution(M1: float, V2: float, M2: float) -> str:
+    V1 = (M2 * V2) / M1
+    return spm_format(
+        diberi=[f"M₁ = {fmt_num(M1, 3)} mol dm⁻³", f"M₂ = {fmt_num(M2, 3)} mol dm⁻³", f"V₂ = {fmt_num(V2, 3)}"],
+        formula=["M₁V₁ = M₂V₂"],
+        pengiraan=[f"{fmt_num(M1, 3)}(V₁) = {fmt_num(M2, 3)}({fmt_num(V2, 3)})", f"V₁ = ({fmt_num(M2, 3)} × {fmt_num(V2, 3)}) ÷ {fmt_num(M1, 3)}", f"V₁ = {fmt_num(V1, 3)}"],
+        jawapan=[f"Isipadu larutan asal, V₁ = {fmt_num(V1, 3)}"],
+    )
+
+
+def solve_ph_from_h(h_conc: float) -> str:
+    ph = -math.log10(h_conc)
+    return spm_format(
+        diberi=[f"[H⁺] = {fmt_num(h_conc, 3)} mol dm⁻³"],
+        formula=["pH = − log [H⁺]"],
+        pengiraan=[f"pH = − log ({fmt_num(h_conc, 3)})", f"pH = {fmt_num(ph, 2)}"],
+        jawapan=[f"pH = {fmt_num(ph, 2)}"],
+    )
+
+
+def solve_h_from_ph(ph: float) -> str:
+    h = 10 ** (-ph)
+    return spm_format(
+        diberi=[f"pH = {fmt_num(ph, 2)}"],
+        formula=["[H⁺] = 10⁻pH"],
+        pengiraan=[f"[H⁺] = 10^-{fmt_num(ph, 2)}", f"[H⁺] = {h:.3e} mol dm⁻³"],
+        jawapan=[f"[H⁺] = {h:.3e} mol dm⁻³"],
+    )
+
+
+def solve_poh_from_oh(oh_conc: float) -> str:
+    poh = -math.log10(oh_conc)
+    return spm_format(
+        diberi=[f"[OH⁻] = {fmt_num(oh_conc, 3)} mol dm⁻³"],
+        formula=["pOH = − log [OH⁻]"],
+        pengiraan=[f"pOH = − log ({fmt_num(oh_conc, 3)})", f"pOH = {fmt_num(poh, 2)}"],
+        jawapan=[f"pOH = {fmt_num(poh, 2)}"],
+    )
+
+
+def solve_oh_from_poh(poh: float) -> str:
+    oh = 10 ** (-poh)
+    return spm_format(
+        diberi=[f"pOH = {fmt_num(poh, 2)}"],
+        formula=["[OH⁻] = 10⁻pOH"],
+        pengiraan=[f"[OH⁻] = 10^-{fmt_num(poh, 2)}", f"[OH⁻] = {oh:.3e} mol dm⁻³"],
+        jawapan=[f"[OH⁻] = {oh:.3e} mol dm⁻³"],
+    )
+
+
+def solve_ph_from_poh(poh: float) -> str:
+    ph = 14 - poh
+    return spm_format(
+        diberi=[f"pOH = {fmt_num(poh, 2)}"],
+        formula=["pH + pOH = 14"],
+        pengiraan=[f"pH = 14 − {fmt_num(poh, 2)}", f"pH = {fmt_num(ph, 2)}"],
+        jawapan=[f"pH = {fmt_num(ph, 2)}"],
+    )
+
+
+def solve_titration_find_volume(known_molarity: float, known_volume_cm3: float, known_formula: str, unknown_molarity: float, unknown_formula: str, equation: str) -> str:
+    known_volume_dm3 = cm3_to_dm3(known_volume_cm3)
+    known_moles = known_molarity * known_volume_dm3
+    ratio = get_ratio(equation, known_formula, unknown_formula)
+    unknown_moles = known_moles * ratio
+    unknown_volume_dm3 = unknown_moles / unknown_molarity
+    unknown_volume_cm3 = dm3_to_cm3(unknown_volume_dm3)
+    return spm_format(
+        diberi=[f"Persamaan = {equation}", f"{known_formula}: M = {fmt_num(known_molarity, 3)} mol dm⁻³, V = {fmt_num(known_volume_cm3, 3)} cm³", f"{unknown_formula}: M = {fmt_num(unknown_molarity, 3)} mol dm⁻³"],
+        formula=["n = MV", "Nisbah mol daripada persamaan kimia", "V = n ÷ M"],
+        pengiraan=[
+            f"V({known_formula}) = {fmt_num(known_volume_cm3, 3)} cm³ = {fmt_num(known_volume_dm3, 3)} dm³",
+            f"n({known_formula}) = {fmt_num(known_molarity, 3)} × {fmt_num(known_volume_dm3, 3)} = {fmt_num(known_moles, 4)} mol",
+            f"Nisbah {known_formula} → {unknown_formula} = {fmt_num(ratio, 3)}",
+            f"n({unknown_formula}) = {fmt_num(known_moles, 4)} × {fmt_num(ratio, 3)} = {fmt_num(unknown_moles, 4)} mol",
+            f"V({unknown_formula}) = {fmt_num(unknown_moles, 4)} ÷ {fmt_num(unknown_molarity, 3)} = {fmt_num(unknown_volume_dm3, 4)} dm³",
+            f"V({unknown_formula}) = {fmt_num(unknown_volume_cm3, 3)} cm³",
+        ],
+        jawapan=[f"Isipadu {unknown_formula} = {fmt_num(unknown_volume_cm3, 3)} cm³"],
+    )
+
+
+def solve_titration_find_molarity(known_mass_g: Optional[float], known_formula: str, known_molarity: Optional[float], known_volume_cm3: Optional[float], unknown_formula: str, unknown_volume_cm3: float, equation: str) -> str:
+    calc_lines: List[str] = []
+    if known_mass_g is not None:
+        known_moles = known_mass_g / molar_mass(known_formula)
+        given_lines = [f"Jisim {known_formula} = {fmt_num(known_mass_g, 3)} g"]
+        calc_lines += [f"M({known_formula}) = {fmt_num(molar_mass(known_formula), 2)} g mol⁻¹", f"n({known_formula}) = {fmt_num(known_mass_g, 3)} ÷ {fmt_num(molar_mass(known_formula), 2)} = {fmt_num(known_moles, 4)} mol"]
+    else:
+        if known_molarity is None or known_volume_cm3 is None:
+            raise ValueError("Maklumat larutan diketahui tidak lengkap.")
+        known_volume_dm3 = cm3_to_dm3(known_volume_cm3)
+        known_moles = known_molarity * known_volume_dm3
+        given_lines = [f"{known_formula}: M = {fmt_num(known_molarity, 3)} mol dm⁻³, V = {fmt_num(known_volume_cm3, 3)} cm³"]
+        calc_lines += [f"V({known_formula}) = {fmt_num(known_volume_cm3, 3)} cm³ = {fmt_num(known_volume_dm3, 3)} dm³", f"n({known_formula}) = {fmt_num(known_molarity, 3)} × {fmt_num(known_volume_dm3, 3)} = {fmt_num(known_moles, 4)} mol"]
+    ratio = get_ratio(equation, known_formula, unknown_formula)
+    unknown_moles = known_moles * ratio
+    unknown_volume_dm3 = cm3_to_dm3(unknown_volume_cm3)
+    unknown_molarity_calc = unknown_moles / unknown_volume_dm3
+    return spm_format(
+        diberi=[f"Persamaan = {equation}"] + given_lines + [f"{unknown_formula}: V = {fmt_num(unknown_volume_cm3, 3)} cm³"],
+        formula=["n = m ÷ M atau n = MV", "Nisbah mol daripada persamaan kimia", "M = n ÷ V"],
+        pengiraan=calc_lines + [
+            f"Nisbah {known_formula} → {unknown_formula} = {fmt_num(ratio, 3)}",
+            f"n({unknown_formula}) = {fmt_num(known_moles, 4)} × {fmt_num(ratio, 3)} = {fmt_num(unknown_moles, 4)} mol",
+            f"V({unknown_formula}) = {fmt_num(unknown_volume_cm3, 3)} cm³ = {fmt_num(unknown_volume_dm3, 3)} dm³",
+            f"M({unknown_formula}) = {fmt_num(unknown_moles, 4)} ÷ {fmt_num(unknown_volume_dm3, 3)} = {fmt_num(unknown_molarity_calc, 3)} mol dm⁻³",
+        ],
+        jawapan=[f"Kemolaran {unknown_formula} = {fmt_num(unknown_molarity_calc, 3)} mol dm⁻³"],
+    )
+
+
+# =====================================
+# BAB 7 RATE
+# =====================================
+def solve_rate_average(change: float, time: float, quantity_unit: str = "cm³", time_unit: str = "min") -> str:
+    rate = change / time
+    unit = f"{quantity_unit} {time_unit}⁻¹"
+    return spm_format(
+        diberi=[f"Perubahan kuantiti = {fmt_num(change, 3)} {quantity_unit}", f"Masa = {fmt_num(time, 3)} {time_unit}"],
+        formula=["Kadar = perubahan kuantiti ÷ masa"],
+        pengiraan=[f"Kadar = {fmt_num(change, 3)} ÷ {fmt_num(time, 3)}", f"Kadar = {fmt_num(rate, 3)} {unit}"],
+        jawapan=[f"Kadar tindak balas = {fmt_num(rate, 3)} {unit}"],
+    )
+
+
+def solve_rate_from_points(time1: float, value1: float, time2: float, value2: float, quantity_unit: str = "cm³", time_unit: str = "min") -> str:
+    change = value2 - value1
+    delta_t = time2 - time1
+    rate = change / delta_t
+    unit = f"{quantity_unit} {time_unit}⁻¹"
+    return spm_format(
+        diberi=[f"Nilai pada masa {fmt_num(time1, 3)} {time_unit} = {fmt_num(value1, 3)} {quantity_unit}", f"Nilai pada masa {fmt_num(time2, 3)} {time_unit} = {fmt_num(value2, 3)} {quantity_unit}"],
+        formula=["Kadar = Δy ÷ Δx"],
+        pengiraan=[f"Δy = {fmt_num(value2, 3)} − {fmt_num(value1, 3)} = {fmt_num(change, 3)} {quantity_unit}", f"Δx = {fmt_num(time2, 3)} − {fmt_num(time1, 3)} = {fmt_num(delta_t, 3)} {time_unit}", f"Kadar = {fmt_num(change, 3)} ÷ {fmt_num(delta_t, 3)} = {fmt_num(rate, 3)} {unit}"],
+        jawapan=[f"Kadar tindak balas = {fmt_num(rate, 3)} {unit}"],
+    )
+
+
+# =====================================
+# BAB TERMOKIMIA
+# =====================================
+def solve_calorimetry(mass_g: float, temp_initial: float, temp_final: float) -> str:
+    delta_t = temp_final - temp_initial
+    Q = mass_g * C_WATER * delta_t
+    return spm_format(
+        diberi=[f"m = {fmt_num(mass_g, 3)} g", f"c = {C_WATER} J g⁻¹ °C⁻¹", f"Suhu awal = {fmt_num(temp_initial, 2)}°C", f"Suhu akhir = {fmt_num(temp_final, 2)}°C"],
+        formula=["Q = mcΔT"],
+        pengiraan=[f"ΔT = {fmt_num(temp_final, 2)} − {fmt_num(temp_initial, 2)} = {fmt_num(delta_t, 2)}°C", f"Q = {fmt_num(mass_g, 3)} × {C_WATER} × {fmt_num(delta_t, 2)}", f"Q = {fmt_num(Q, 2)} J"],
+        jawapan=[f"Haba, Q = {fmt_num(Q, 2)} J"],
+    )
+
+
+def solve_enthalpy(Q_joule: float, moles: float) -> str:
+    dH_j = -(Q_joule / moles)
+    dH_kj = j_to_kj(dH_j)
+    return spm_format(
+        diberi=[f"Q = {fmt_num(Q_joule, 2)} J", f"Mol = {fmt_num(moles, 3)} mol"],
+        formula=["ΔH = − Q ÷ mol"],
+        pengiraan=[f"ΔH = − ({fmt_num(Q_joule, 2)} ÷ {fmt_num(moles, 3)})", f"ΔH = {fmt_num(dH_j, 2)} J mol⁻¹", f"ΔH = {fmt_num(dH_kj, 2)} kJ mol⁻¹"],
+        jawapan=[f"Perubahan entalpi, ΔH = {fmt_num(dH_kj, 2)} kJ mol⁻¹"],
+    )
+
+
+def solve_thermochemistry_type(temp_initial: float, temp_final: float) -> str:
+    delta_t = temp_final - temp_initial
+    if delta_t > 0:
+        jenis = "Eksotermik"
+        penjelasan = "Suhu meningkat, maka haba dibebaskan dan ΔH bernilai negatif."
+    elif delta_t < 0:
+        jenis = "Endotermik"
+        penjelasan = "Suhu menurun, maka haba diserap dan ΔH bernilai positif."
+    else:
+        jenis = "Tiada perubahan jelas"
+        penjelasan = "Suhu tidak berubah, jadi jenis tindak balas tidak dapat dipastikan dengan yakin."
+    return spm_format(
+        diberi=[f"Suhu awal = {fmt_num(temp_initial, 2)}°C", f"Suhu akhir = {fmt_num(temp_final, 2)}°C"],
+        formula=["Bandingkan suhu awal dan suhu akhir"],
+        pengiraan=[f"ΔT = {fmt_num(temp_final, 2)} − {fmt_num(temp_initial, 2)} = {fmt_num(delta_t, 2)}°C", penjelasan],
+        jawapan=[f"Jenis tindak balas = {jenis}"],
+    )
+
+
+# =====================================
+# FIX BUG #5 — DELTA H ENDOTHERMIC
+# =====================================
+def solve_delta_h_from_calorimetry(mass_g: float, temp_initial: float, temp_final: float, moles: float) -> str:
+    """
+    FIX BUG #5: Correctly handle ENDOTHERMIC reactions (suhu menurun).
+
+    EKSOTERMIK: temp_final > temp_initial
+      → ΔT positif → Q positif → ΔH = -(+Q/mol) = NEGATIF ✓
+
+    ENDOTERMIK: temp_final < temp_initial
+      → ΔT negatif → Q negatif → ΔH = -(-Q/mol) = POSITIF ✓
+    """
+    delta_t = temp_final - temp_initial
+    Q = mass_g * C_WATER * delta_t
+    dH_j = -(Q / moles)
+    dH_kj = j_to_kj(dH_j)
+
+    if delta_t > 0:
+        jenis = "Eksotermik"
+        tanda_note = "Suhu meningkat → haba dibebaskan → ΔH negatif"
+    elif delta_t < 0:
+        jenis = "Endotermik"
+        tanda_note = "Suhu menurun → haba diserap → ΔH positif"
+    else:
+        jenis = "Neutral"
+        tanda_note = "Tiada perubahan suhu"
+
+    return spm_format(
+        diberi=[
+            f"m = {fmt_num(mass_g, 3)} g",
+            f"c = {C_WATER} J g⁻¹ °C⁻¹",
+            f"Suhu awal = {fmt_num(temp_initial, 2)}°C",
+            f"Suhu akhir = {fmt_num(temp_final, 2)}°C",
+            f"Mol = {fmt_num(moles, 3)} mol",
+        ],
+        formula=["Q = mcΔT", "ΔH = −Q ÷ mol"],
+        pengiraan=[
+            f"ΔT = {fmt_num(temp_final, 2)} − {fmt_num(temp_initial, 2)} = {fmt_num(delta_t, 2)}°C",
+            f"Q = {fmt_num(mass_g, 3)} × {C_WATER} × ({fmt_num(delta_t, 2)}) = {fmt_num(Q, 2)} J",
+            f"ΔH = −({fmt_num(Q, 2)} ÷ {fmt_num(moles, 3)}) = {fmt_num(dH_j, 2)} J mol⁻¹",
+            f"ΔH = {fmt_num(dH_kj, 2)} kJ mol⁻¹",
+            tanda_note,
+        ],
+        jawapan=[
+            f"Perubahan entalpi, ΔH = {fmt_num(dH_kj, 2)} kJ mol⁻¹",
+            f"Jenis tindak balas: {jenis}",
+        ],
+    )
+
+
+# =====================================
+# BAB REDOX
+# =====================================
+def solve_oxidation_number(species: str, target_element: str, charge: Optional[int] = None) -> str:
+    parsed = parse_formula(species)
+    total_charge = _charge_from_species(species, charge)
+    if target_element not in parsed:
+        raise ValueError(f"Unsur sasaran '{target_element}' tiada dalam {species}.")
+
+    known_sum = 0.0
+    known_lines: List[str] = []
+    for el, count in parsed.items():
+        if el == target_element:
+            continue
+        if el == "O":
+            ox = -2
+        elif el == "H":
+            ox = +1
+        elif el in {"Li", "Na", "K"}:
+            ox = +1
+        elif el in {"Mg", "Ca", "Ba"}:
+            ox = +2
         else:
-            n_mol = 1.0
-            n_source = "n = 1 mol (anggaran)"
+            raise ValueError(f"Belum dapat tentukan nombor pengoksidaan unsur sokongan '{el}' secara automatik.")
+        known_sum += ox * count
+        known_lines.append(f"{el} = {ox}")
 
-        # Tanda ΔH
-        if delta_T > 0:
-            dH = -(Q_kJ / n_mol)
-            jenis = "Eksotermik" if lang=="BM" else "Exothermic"
-            note = "Suhu naik → haba dibebaskan → ΔH negatif"
+    target_count = parsed[target_element]
+    x = (total_charge - known_sum) / target_count
+    lhs_terms = []
+    for el, count in parsed.items():
+        if el == target_element:
+            lhs_terms.append("x" if count == 1 else f"{count}x")
         else:
-            dH = +(Q_kJ / n_mol)
-            jenis = "Endotermik" if lang=="BM" else "Endothermic"
-            note = "Suhu turun → haba diserap → ΔH positif"
+            if el == "O":
+                ox = -2
+            elif el == "H":
+                ox = +1
+            elif el in {"Li", "Na", "K"}:
+                ox = +1
+            elif el in {"Mg", "Ca", "Ba"}:
+                ox = +2
+            else:
+                ox = 0
+            lhs_terms.append(f"{count}({ox:+g})" if count != 1 else f"({ox:+g})")
 
-        answer = _spm_format(
-            diberi=[f"m = {mass_g} g", f"c = {c} J g⁻¹ °C⁻¹",
-                    f"ΔT = {abs(delta_T)} °C", f"Mol = {round(n_mol,4)} mol ({n_source})"],
-            formula=["Q = mcΔT", "ΔH = −Q(kJ) ÷ mol  [kJ mol⁻¹]"],
-            pengiraan=[
-                f"Q = {mass_g} × {c} × {abs(delta_T)} = {round(Q_J,2)} J",
-                f"Q = {round(Q_J,2)} ÷ 1000 = {round(Q_kJ,4)} kJ",
-                f"ΔH = {round(dH,2)} kJ mol⁻¹",
-                note,
-            ],
-            jawapan=[f"ΔH = {round(dH,2)} kJ mol⁻¹", f"Jenis: {jenis}"],
-            lang=lang
+    return spm_format(
+        diberi=[f"Spesies = {species}", f"Cas ion = {total_charge}"] + known_lines,
+        formula=["Jumlah nombor pengoksidaan = cas spesies"],
+        pengiraan=[
+            f"Biarkan nombor pengoksidaan {target_element} = x",
+            f"{' + '.join(lhs_terms)} = {total_charge}",
+            f"{target_count}x + ({fmt_num(known_sum, 2)}) = {total_charge}" if target_count != 1 else f"x + ({fmt_num(known_sum, 2)}) = {total_charge}",
+            f"x = {fmt_num(x, 2)}",
+        ],
+        jawapan=[f"Nombor pengoksidaan {target_element} = {fmt_num(x, 2)}"],
+    )
+
+
+def solve_redox_change(before: float, after: float, element: str = "unsur") -> str:
+    if after > before:
+        jenis = "Pengoksidaan"
+        sebab = "nombor pengoksidaan meningkat"
+    elif after < before:
+        jenis = "Penurunan"
+        sebab = "nombor pengoksidaan menurun"
+    else:
+        jenis = "Tiada perubahan redoks"
+        sebab = "nombor pengoksidaan tidak berubah"
+    return spm_format(
+        diberi=[f"Nombor pengoksidaan awal = {fmt_num(before, 2)}", f"Nombor pengoksidaan akhir = {fmt_num(after, 2)}"],
+        formula=["Bandingkan nombor pengoksidaan sebelum dan selepas"],
+        pengiraan=[f"Perubahan = {fmt_num(after, 2)} − {fmt_num(before, 2)} = {fmt_num(after - before, 2)}", sebab],
+        jawapan=[f"{element} mengalami {jenis.lower()}" if jenis != "Tiada perubahan redoks" else jenis],
+    )
+
+
+# =====================================
+# DISPATCHER
+# =====================================
+def solve_by_task(task: str, data: Dict[str, Any]) -> str:
+    formula = _pick_formula(data)
+    target_formula = _pick_target_formula(data)
+
+    if task == "jmr":
+        if not formula:
+            raise ValueError("Formula diperlukan.")
+        return solve_jmr(formula)
+
+    # FIX BUG #1 — multi-formula mol
+    if task == "moles_multi":
+        return solve_moles_multi(data["formulas"], data["masses"])
+
+    if task == "moles_from_mass":
+        if not formula:
+            raise ValueError("Formula diperlukan.")
+        return solve_moles_from_mass(data["mass_g"], formula)
+
+    if task == "moles_from_volume":
+        volume_dm3 = data.get("volume_dm3")
+        if volume_dm3 is None and data.get("volume_cm3") is not None:
+            volume_dm3 = cm3_to_dm3(data["volume_cm3"])
+        if volume_dm3 is None:
+            raise ValueError("Isipadu gas diperlukan.")
+        return solve_moles_from_volume(volume_dm3, data.get("condition"))
+
+    if task == "particles_from_moles":
+        return solve_particles_from_moles(data["moles"])
+
+    if task == "volume_from_moles":
+        return solve_volume_from_moles(data["moles"], data.get("condition"))
+
+    if task == "mass_from_moles":
+        if not formula:
+            raise ValueError("Formula diperlukan.")
+        return solve_mass_from_moles(data["moles"], formula)
+
+    if task == "particles_from_volume":
+        volume_dm3 = data.get("volume_dm3")
+        if volume_dm3 is None and data.get("volume_cm3") is not None:
+            volume_dm3 = cm3_to_dm3(data["volume_cm3"])
+        if volume_dm3 is None:
+            raise ValueError("Isipadu gas diperlukan.")
+        return solve_particles_from_volume(volume_dm3, data.get("condition"))
+
+    if task == "particles_from_mass":
+        if not formula:
+            raise ValueError("Formula diperlukan.")
+        return solve_particles_from_mass(data["mass_g"], formula)
+
+    if task == "mass_from_volume":
+        volume_dm3 = data.get("volume_dm3")
+        if volume_dm3 is None and data.get("volume_cm3") is not None:
+            volume_dm3 = cm3_to_dm3(data["volume_cm3"])
+        if volume_dm3 is None:
+            raise ValueError("Isipadu gas diperlukan.")
+        if not formula:
+            raise ValueError("Formula diperlukan.")
+        return solve_mass_from_volume(volume_dm3, formula, data.get("condition"))
+
+    if task in {"volume_from_mass", "moles_from_mass_then_volume"}:
+        if not formula:
+            raise ValueError("Formula diperlukan.")
+        return solve_volume_from_mass_multistep(data["mass_g"], formula, data.get("condition"))
+
+    if task == "mol_atoms_from_gas":
+        return solve_mol_atoms_from_gas(
+            data["options"],
+            data["target_mol_atoms"],
+            data.get("condition"),
+            data.get("volume_dm3"),
         )
-        return {
-            "answer": answer,
-            "Q_joules": round(Q_J,2), "Q_kJ": round(Q_kJ,4),
-            "delta_H": round(dH,2), "n_mol": round(n_mol,5), "jenis": jenis,
-            "task": "thermochemistry",
-        }
-    except Exception as e:
-        return {"error": f"Ralat termokimia: {e}"}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 5: pH UNIVERSAL — dari H⁺ atau OH⁻ [IMPROVED]
-# ─────────────────────────────────────────────────────────────────────────────
-
-def solve_ph(concentration: float, ion_type: str = "H+", lang="BM") -> dict:
-    """
-    pH dari H⁺ atau OH⁻.
-    Terengganu Q25: OH⁻=0.5 → pH=13.7 ✓
-    Johor K2Q7: HCl 0.001 → pH=3 ✓
-    """
-    try:
-        is_acid = ion_type.upper() in ("H+","H⁺","ASID","ACID","HCL","HNO3","H2SO4")
-
-        if is_acid:
-            pH = -math.log10(concentration)
-            pOH = 14 - pH
-            answer = _spm_format(
-                diberi=[f"[H⁺] = {concentration} mol dm⁻³"],
-                formula=["pH = −log[H⁺]"],
-                pengiraan=[f"pH = −log({concentration})", f"pH = {round(pH,2)}"],
-                jawapan=[f"pH = {round(pH,2)}"],
-                lang=lang
-            )
-        else:
-            pOH = -math.log10(concentration)
-            pH = 14 - pOH
-            answer = _spm_format(
-                diberi=[f"[OH⁻] = {concentration} mol dm⁻³"],
-                formula=["pOH = −log[OH⁻]", "pH = 14 − pOH"],
-                pengiraan=[
-                    f"pOH = −log({concentration}) = {round(pOH,3)}",
-                    f"pH = 14 − {round(pOH,3)} = {round(pH,2)}",
-                ],
-                jawapan=[f"pOH = {round(pOH,3)}", f"pH = {round(pH,2)}"],
-                lang=lang
-            )
-        return {"answer": answer, "pH": round(pH,2), "pOH": round(pOH,3), "task": "ph_calculation"}
-    except Exception as e:
-        return {"error": str(e)}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 6: TITRATION — NISBAH MOL MANA-MANA [BUG FIX 5]
-# ─────────────────────────────────────────────────────────────────────────────
-
-def solve_titration(
-    v1_cm3: float, m1: float,
-    v2_cm3: float = None, m2: float = None,
-    coeff1: int = 1, coeff2: int = 1,
-    lang: str = "BM",
-) -> dict:
-    """
-    (M₁V₁)/coeff₁ = (M₂V₂)/coeff₂
-
-    Johor Q: 25cm³ NaOH 0.1M neut 20cm³ HCl → M(HCl)=0.125 ✓
-    Terengganu Q29: NaOH 25cm³ 0.5M, cari V(H2SO4) 0.5M, nisbah 1:2
-      → V(H2SO4) = 12.5cm³ ✓
-    """
-    try:
-        if m2 is None and v2_cm3 is not None:
-            m2 = (m1 * v1_cm3 * coeff2) / (coeff1 * v2_cm3)
-            solve_for = "M2"
-        elif v2_cm3 is None and m2 is not None:
-            v2_cm3 = (m1 * v1_cm3 * coeff2) / (coeff1 * m2)
-            solve_for = "V2"
-        else:
-            return {"error": "Perlu M2 atau V2 untuk dikira"}
-
-        nisbah = f"{coeff1}:{coeff2}"
-        formula_str = f"(M₁ × V₁) / {coeff1} = (M₂ × V₂) / {coeff2}"
-
-        if solve_for == "M2":
-            calc = [
-                f"({m1} × {v1_cm3}) / {coeff1} = (M₂ × {v2_cm3}) / {coeff2}",
-                f"M₂ = ({m1} × {v1_cm3} × {coeff2}) ÷ ({coeff1} × {v2_cm3})",
-                f"M₂ = {round(m2,4)} mol dm⁻³",
-            ]
-            jawapan = [f"Kemolaran = {round(m2,4)} mol dm⁻³"]
-        else:
-            calc = [
-                f"({m1} × {v1_cm3}) / {coeff1} = ({m2} × V₂) / {coeff2}",
-                f"V₂ = ({m1} × {v1_cm3} × {coeff2}) ÷ ({coeff1} × {m2})",
-                f"V₂ = {round(v2_cm3,2)} cm³",
-            ]
-            jawapan = [f"Isipadu = {round(v2_cm3,2)} cm³"]
-
-        answer = _spm_format(
-            diberi=[f"V₁ = {v1_cm3} cm³, M₁ = {m1} mol dm⁻³",
-                    f"Nisbah mol = {nisbah}"],
-            formula=[formula_str],
-            pengiraan=calc,
-            jawapan=jawapan,
-            lang=lang
+    if task == "stoichiometry_volume_to_mass":
+        equation = data["equation"]
+        given_formula = data.get("given_formula")
+        target_formula = data.get("target_formula")
+        if not given_formula or not target_formula:
+            raise ValueError("Formula diberi dan sasaran diperlukan.")
+        given_volume_cm3 = data.get("given_volume_cm3") or data.get("volume_cm3")
+        if not given_volume_cm3:
+            raise ValueError("Isipadu gas diperlukan dalam cm3.")
+        return solve_stoichiometry_volume_to_mass(
+            equation, given_formula, given_volume_cm3,
+            target_formula, data.get("condition"),
         )
-        return {
-            "answer": answer,
-            "M2": round(m2,4) if solve_for=="M2" else None,
-            "V2": round(v2_cm3,2) if solve_for=="V2" else None,
-            "task": "titration",
-        }
-    except Exception as e:
-        return {"error": f"Ralat titrasi: {e}"}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 7: CONCENTRATION + MOLARITY [BUG FIX 1 + 4]
-# ─────────────────────────────────────────────────────────────────────────────
-
-def solve_concentration(mass_g: float, volume_cm3: float,
-                        formula: str = None, lang="BM") -> dict:
-    """
-    Kira kepekatan g/dm³ DAN mol/dm³.
-    BUG FIX 1: Tidak crash lagi.
-    BUG FIX 4: Kira kedua-dua unit.
-    """
-    try:
-        vol_dm3 = volume_cm3 / 1000
-        conc_g = mass_g / vol_dm3
-
-        diberi = [f"Jisim = {mass_g} g",
-                  f"Isipadu = {volume_cm3} cm³ = {vol_dm3} dm³"]
-        formula_lines = ["Kepekatan (g dm⁻³) = jisim ÷ isipadu"]
-        calc = [f"Kepekatan = {mass_g} ÷ {vol_dm3} = {round(conc_g,3)} g dm⁻³"]
-        jawapan = [f"Kepekatan = {round(conc_g,3)} g dm⁻³"]
-
-        # BUG FIX 4: Kira mol/dm³ jika formula ada
-        conc_mol = None
-        if formula:
-            M = calculate_molar_mass(formula)
-            if M:
-                n = mass_g / M
-                conc_mol = n / vol_dm3
-                diberi += [f"Formula = {formula}", f"M = {M} g mol⁻¹"]
-                formula_lines += ["n = jisim ÷ M",
-                                  "Kepekatan molar = n ÷ isipadu (dm³)"]
-                calc += [f"n = {mass_g} ÷ {M} = {round(n,4)} mol",
-                         f"Kepekatan molar = {round(n,4)} ÷ {vol_dm3} = {round(conc_mol,4)} mol dm⁻³"]
-                jawapan += [f"Kepekatan molar = {round(conc_mol,4)} mol dm⁻³"]
-
-        answer = _spm_format(diberi, formula_lines, calc, jawapan, lang)
-        return {
-            "answer": answer,
-            "conc_g_dm3": round(conc_g,3),
-            "conc_mol_dm3": round(conc_mol,4) if conc_mol else None,
-            "task": "concentration",
-        }
-    except Exception as e:
-        return {"error": f"Ralat kepekatan: {e}"}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 8: DILUTION [BUG FIX 1]
-# ─────────────────────────────────────────────────────────────────────────────
-
-def solve_dilution(m1: float, v1_cm3: float,
-                   v2_cm3: float = None, m2: float = None, lang="BM") -> dict:
-    """M1V1 = M2V2. BUG FIX 1: Tidak crash."""
-    try:
-        if v2_cm3 and not m2:
-            m2 = (m1 * v1_cm3) / v2_cm3
-            solve_for = "M2"
-        elif m2 and not v2_cm3:
-            v2_cm3 = (m1 * v1_cm3) / m2
-            solve_for = "V2"
-        else:
-            return {"error": "Perlu M2 atau V2"}
-
-        calc = [f"{m1} × {v1_cm3} = {'M₂' if solve_for=='M2' else m2} × {v2_cm3 if solve_for=='M2' else 'V₂'}"]
-        if solve_for == "M2":
-            calc.append(f"M₂ = {round(m2,4)} mol dm⁻³")
-            jawapan = [f"Kemolaran baharu = {round(m2,4)} mol dm⁻³"]
-        else:
-            calc.append(f"V₂ = {round(v2_cm3,2)} cm³")
-            jawapan = [f"Isipadu baharu = {round(v2_cm3,2)} cm³"]
-
-        answer = _spm_format(
-            diberi=[f"M₁ = {m1} mol dm⁻³, V₁ = {v1_cm3} cm³"],
-            formula=["M₁V₁ = M₂V₂"],
-            pengiraan=calc, jawapan=jawapan, lang=lang
+    if task == "voltaic_cell":
+        return solve_voltaic_cell(
+            data["anode_formula"],
+            data["cathode_formula"],
+            data["e0_anode"],
+            data["e0_cathode"],
         )
-        return {
-            "answer": answer,
-            "M2": round(m2,4) if solve_for=="M2" else None,
-            "V2": round(v2_cm3,2) if solve_for=="V2" else None,
-            "task": "dilution",
-        }
-    except Exception as e:
-        return {"error": f"Ralat pencairan: {e}"}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 9: VOLTAIC CELL
-# ─────────────────────────────────────────────────────────────────────────────
-
-def solve_voltaic_cell(e0_katod: float, e0_anod: float, lang="BM") -> dict:
-    """E⁰sel = E⁰katod − E⁰anod"""
-    try:
-        e0_sel = e0_katod - e0_anod
-        answer = _spm_format(
-            diberi=[f"E⁰katod = {e0_katod} V", f"E⁰anod = {e0_anod} V"],
-            formula=["E⁰sel = E⁰katod − E⁰anod"],
-            pengiraan=[f"E⁰sel = ({e0_katod}) − ({e0_anod})",
-                       f"E⁰sel = {round(e0_sel,2)} V"],
-            jawapan=[f"E⁰sel = {round(e0_sel,2)} V"],
-            lang=lang
+    if task == "molarity_from_delta_h":
+        return solve_molarity_from_delta_h(
+            data["volume1_cm3"],
+            data["volume2_cm3"],
+            data["delta_t"],
+            data["delta_h_kj_mol"],
+            data.get("density", 1.0),
+            data.get("specific_heat", 4.2),
         )
-        return {"answer": answer, "e0_sel": round(e0_sel,2), "task": "voltaic_cell"}
-    except Exception as e:
-        return {"error": str(e)}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 10: MOLARITY FROM ΔH [BUG FIX 6]
-# ─────────────────────────────────────────────────────────────────────────────
-
-def solve_molarity_from_dh(delta_h_kJ_mol: float, delta_T: float,
-                            volume_cm3_total: float,
-                            c: float = C_WATER, density: float = 1.0,
-                            lang="BM") -> dict:
-    """
-    BUG FIX 6: Solver lengkap — 3 langkah:
-    Q = mcΔT → n = Q/|ΔH| → M = n/V
-
-    Ujian: ΔH=-57.3, ΔT=7°C, V=100cm³ → M=1.026 mol/dm³ ✓
-    """
-    try:
-        mass_g = volume_cm3_total * density
-        Q_J = mass_g * c * abs(delta_T)
-        Q_kJ = Q_J / 1000
-        n_mol = Q_kJ / abs(delta_h_kJ_mol)
-        half_dm3 = (volume_cm3_total / 2) / 1000
-        molarity = n_mol / half_dm3
-
-        answer = _spm_format(
-            diberi=[f"ΔH = {delta_h_kJ_mol} kJ mol⁻¹",
-                    f"ΔT = {delta_T} °C",
-                    f"Jumlah isipadu = {volume_cm3_total} cm³"],
-            formula=["Q = mcΔT",
-                     "n = Q(kJ) ÷ |ΔH|",
-                     "Kemolaran = n ÷ V(separuh, dm³)"],
-            pengiraan=[
-                f"Q = {mass_g} × {c} × {abs(delta_T)} = {round(Q_J,2)} J = {round(Q_kJ,4)} kJ",
-                f"n = {round(Q_kJ,4)} ÷ {abs(delta_h_kJ_mol)} = {round(n_mol,5)} mol",
-                f"V(setiap larutan) = {volume_cm3_total}/2 = {volume_cm3_total/2} cm³ = {half_dm3} dm³",
-                f"Kemolaran = {round(n_mol,5)} ÷ {half_dm3} = {round(molarity,3)} mol dm⁻³",
-            ],
-            jawapan=[f"Kemolaran = {round(molarity,3)} mol dm⁻³"],
-            lang=lang
+    if task == "stoichiometry_mass_to_volume":
+        equation = data["equation"]
+        given_formula = data.get("given_formula")
+        target_formula = data.get("target_formula")
+        if not given_formula or not target_formula:
+            raise ValueError("Formula diberi dan sasaran diperlukan.")
+        return solve_stoichiometry_mass_to_volume(
+            equation, given_formula, data["given_mass_g"],
+            target_formula, data.get("condition"),
         )
-        return {
-            "answer": answer,
-            "Q_joules": round(Q_J,2), "Q_kJ": round(Q_kJ,4),
-            "n_mol": round(n_mol,5), "molarity": round(molarity,3),
-            "task": "molarity_from_delta_h",
-        }
-    except Exception as e:
-        return {"error": str(e)}
 
+    if task == "stoichiometry_mass_to_mass":
+        equation = data["equation"]
+        if "->" not in equation:
+            raise ValueError("Persamaan kimia tidak lengkap.")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 11: EMPIRICAL FORMULA
-# ─────────────────────────────────────────────────────────────────────────────
+        reactants, products = equation.split("->", 1)
+        reactant_list = re.findall(r"[A-Z][A-Za-z0-9()]*", reactants)
+        product_list = re.findall(r"[A-Z][A-Za-z0-9()]*", products)
 
-def solve_empirical_formula(composition: dict, lang="BM") -> dict:
-    """
-    composition: {"C": 40.0, "H": 6.67, "O": 53.33}  (% atau jisim)
-    """
-    try:
-        moles = {}
-        for elem, val in composition.items():
-            if elem not in AR:
-                return {"error": f"Unsur tidak dikenali: {elem}"}
-            moles[elem] = val / AR[elem]
+        given_formula = data.get("given_formula")
+        target_formula = data.get("target_formula")
 
-        min_mol = min(moles.values())
-        ratio = {e: round(v/min_mol, 2) for e,v in moles.items()}
+        if not given_formula and reactant_list:
+            given_formula = reactant_list[0]
+        if not target_formula and product_list:
+            target_formula = product_list[0]
 
-        # Round ke integer (dengan tolerance)
-        def to_int(x):
-            for mult in [1,2,3,4]:
-                val = x * mult
-                if abs(val - round(val)) < 0.1:
-                    return int(round(val)), mult
-            return int(round(x)), 1
+        if not given_formula or not target_formula:
+            raise ValueError("Tidak dapat tentukan bahan diberi atau bahan sasaran.")
 
-        formula_parts = []
-        multiplier = 1
-        for elem, r in ratio.items():
-            int_r, m = to_int(r)
-            multiplier = max(multiplier, m)
-
-        empirical = ""
-        for elem, r in ratio.items():
-            int_r = int(round(r * multiplier))
-            empirical += elem + (str(int_r) if int_r > 1 else "")
-
-        calc_lines = []
-        for elem, val in composition.items():
-            calc_lines.append(f"Mol {elem} = {val} ÷ {AR[elem]} = {round(moles[elem],3)}")
-        calc_lines.append(f"Bahagi dengan mol terkecil = {round(min_mol,3)}")
-        for elem, r in ratio.items():
-            calc_lines.append(f"Nisbah {elem} = {r} ≈ {int(round(r*multiplier))}")
-
-        answer = _spm_format(
-            diberi=[f"Komposisi: {composition}"],
-            formula=["Mol = nilai ÷ Ar", "Bahagikan semua mol dengan mol terkecil"],
-            pengiraan=calc_lines,
-            jawapan=[f"Formula empirik = {empirical}"],
-            lang=lang
+        return solve_stoichiometry_mass_to_mass(
+            equation, given_formula, data["given_mass_g"], target_formula,
         )
-        return {"answer": answer, "formula_empirik": empirical, "task": "empirical_formula"}
-    except Exception as e:
-        return {"error": str(e)}
 
+    if task == "empirical_formula":
+        return solve_empirical_formula(data["element_masses"])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 12: JISIM MOLAR (JMR)
-# ─────────────────────────────────────────────────────────────────────────────
+    if task == "ar_from_abundance":
+        return solve_ar_from_abundance(data["isotope_masses"], data["abundances"])
 
-def solve_molar_mass(formula: str, ar_override: dict = None, lang="BM") -> dict:
-    """
-    Kira JMR. Support formula kompleks + hidrat + Ar custom dari soalan.
-    ar_override: {"Cu": 64} bila soalan beri Ar berbeza dari standard
-    """
-    try:
-        M = calculate_molar_mass(formula, ar_override)
-        if not M:
-            return {"error": f"Tidak kenal formula: {formula}"}
-        answer = _spm_format(
-            diberi=[f"Formula = {formula}"],
-            formula=["JMR = jumlah (bilangan atom × Ar)"],
-            pengiraan=[f"JMR = {M}"],
-            jawapan=[f"JMR = {M} g mol⁻¹"],
-            lang=lang
+    if task == "subatomic":
+        return solve_subatomic(int(data["A"]), int(data["Z"]))
+
+    if task == "concentration_g_dm3":
+        return solve_concentration_g_dm3(
+            data["mass_g"], data.get("volume_cm3"), data.get("volume_dm3"),
         )
-        return {"answer": answer, "molar_mass": M, "task": "molar_mass"}
-    except Exception as e:
-        return {"error": str(e)}
 
+    if task == "molarity_from_mass":
+        volume_dm3 = data.get("volume_dm3")
+        if volume_dm3 is None and data.get("volume_cm3") is not None:
+            volume_dm3 = cm3_to_dm3(data["volume_cm3"])
+        if volume_dm3 is None:
+            raise ValueError("Isipadu larutan diperlukan.")
+        if not formula:
+            raise ValueError("Formula diperlukan.")
+        return solve_molarity_from_mass(data["mass_g"], formula, volume_dm3)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 13: KADAR TINDAK BALAS
-# ─────────────────────────────────────────────────────────────────────────────
-
-def solve_rate_of_reaction(delta_y: float, delta_x: float,
-                            unit_y: str = "cm³", unit_x: str = "s",
-                            lang="BM") -> dict:
-    """Kadar = Δy ÷ Δx"""
-    try:
-        rate = delta_y / delta_x
-        unit = f"{unit_y}/{unit_x}"
-        answer = _spm_format(
-            diberi=[f"Δ{unit_y} = {delta_y} {unit_y}", f"Δmasa = {delta_x} {unit_x}"],
-            formula=["Kadar = Δy ÷ Δx"],
-            pengiraan=[f"Kadar = {delta_y} ÷ {delta_x}", f"Kadar = {round(rate,3)} {unit}"],
-            jawapan=[f"Kadar tindak balas = {round(rate,3)} {unit}"],
-            lang=lang
+    if task == "mass_from_molarity":
+        return solve_mass_from_molarity(
+            data["molarity"], data["volume_dm3"], data["formula"]
         )
-        return {"answer": answer, "rate": round(rate,3), "unit": unit, "task": "rate_of_reaction"}
-    except Exception as e:
-        return {"error": str(e)}
 
+    if task == "dilution":
+        return solve_dilution(data["M1"], data["V2"], data["M2"])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 14: JISIM ATOM RELATIF DARI ISOTOP
-# ─────────────────────────────────────────────────────────────────────────────
+    if task == "ph_from_h":
+        h_plus = data.get("h_plus") or data.get("h_conc")
+        if h_plus is None:
+            raise ValueError("Nilai [H⁺] tidak ditemui.")
+        return solve_ph_from_h(h_plus)
 
-def solve_relative_ar(isotopes: list, lang="BM") -> dict:
-    """
-    isotopes = [(jisim, kelimpahan_pct), ...]
-    Contoh: [(35, 75), (37, 25)] → 35.5
-    """
-    try:
-        ar = sum(mass * (pct/100) for mass, pct in isotopes)
-        calc_parts = [f"({mass} × {pct}%)" for mass, pct in isotopes]
-        answer = _spm_format(
-            diberi=[f"Isotop: {isotopes}"],
-            formula=["Ar = Σ(jisim × kelimpahan)"],
-            pengiraan=[" + ".join(calc_parts) + f" = {round(ar,2)}"],
-            jawapan=[f"Jisim atom relatif = {round(ar,2)}"],
-            lang=lang
+    if task == "h_from_ph":
+        return solve_h_from_ph(data["ph"])
+
+    if task == "poh_from_oh":
+        oh_minus = data.get("oh_minus") or data.get("oh_conc")
+        if oh_minus is None:
+            raise ValueError("Nilai [OH⁻] tidak ditemui.")
+        return solve_poh_from_oh(oh_minus)
+
+    if task == "oh_from_poh":
+        return solve_oh_from_poh(data["poh"])
+
+    if task == "ph_from_poh":
+        # Support direct pOH value OR [OH-] concentration (two-step)
+        poh = data.get("poh")
+        if poh is None:
+            oh_conc = data.get("oh_conc") or data.get("oh_minus")
+            if oh_conc is not None:
+                import math as _math
+                poh = -_math.log10(oh_conc)
+        if poh is None:
+            raise ValueError("Nilai pOH atau [OH-] diperlukan.")
+        return solve_ph_from_poh(poh)
+
+    if task == "titration_find_volume":
+        equation = data.get("equation")
+        if not equation:
+            equation = f"{data['known_formula']} + {data['unknown_formula']} -> salt + H2O"
+        return solve_titration_find_volume(
+            data["known_molarity"], data["known_volume_cm3"],
+            data["known_formula"], data["unknown_molarity"],
+            data["unknown_formula"], equation,
         )
-        return {"answer": answer, "Ar": round(ar,2), "task": "relative_ar"}
-    except Exception as e:
-        return {"error": str(e)}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SOLVER 15: MASS FROM MOLARITY [BUG FIX — router fix]
-# ─────────────────────────────────────────────────────────────────────────────
-
-def solve_mass_from_molarity(formula: str, molarity: float, volume_cm3: float,
-                              lang="BM") -> dict:
-    """Jisim untuk buat larutan. n = M×V, m = n×M"""
-    try:
-        M = calculate_molar_mass(formula)
-        if not M:
-            return {"error": f"Tidak kenal formula: {formula}"}
-        vol_dm3 = volume_cm3 / 1000
-        n = molarity * vol_dm3
-        mass = n * M
-        answer = _spm_format(
-            diberi=[f"Formula = {formula}", f"Kemolaran = {molarity} mol dm⁻³",
-                    f"Isipadu = {volume_cm3} cm³ = {vol_dm3} dm³", f"M = {M} g mol⁻¹"],
-            formula=["n = kemolaran × isipadu (dm³)", "m = n × M"],
-            pengiraan=[f"n = {molarity} × {vol_dm3} = {round(n,4)} mol",
-                       f"m = {round(n,4)} × {M} = {round(mass,3)} g"],
-            jawapan=[f"Jisim {formula} = {round(mass,3)} g"],
-            lang=lang
+    if task == "titration_find_molarity":
+        equation = data.get("equation")
+        if not equation:
+            equation = f"{data['known_formula']} + {data['unknown_formula']} -> salt + H2O"
+        return solve_titration_find_molarity(
+            data.get("known_mass_g"), data["known_formula"],
+            data.get("known_molarity"), data.get("known_volume_cm3"),
+            data["unknown_formula"], data["unknown_volume_cm3"], equation,
         )
-        return {"answer": answer, "mass_g": round(mass,3), "task": "mass_from_molarity"}
-    except Exception as e:
-        return {"error": str(e)}
 
+    if task == "rate_average":
+        return solve_rate_average(
+            data["change"], data["time"],
+            data.get("quantity_unit", "cm³"), data.get("time_unit", "min"),
+        )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SELF-TEST — SEMUA SOLVER (Johor + Terengganu + Pattern Umum)
-# ─────────────────────────────────────────────────────────────────────────────
+    if task == "rate_from_points":
+        return solve_rate_from_points(
+            data["time1"], data["value1"], data["time2"], data["value2"],
+            data.get("quantity_unit", "cm³"), data.get("time_unit", "min"),
+        )
 
-def run_all_tests():
-    P, F = "✅", "❌"
-    results = []
+    if task == "calorimetry":
+        return solve_calorimetry(
+            data["mass_g"], data["temp_initial"], data["temp_final"],
+        )
 
-    tests = [
-        # Molar mass
-        ("JMR NaOH=40",       lambda: calculate_molar_mass("NaOH"),          lambda v: abs(v-40)<0.1),
-        ("JMR Al2(SO4)3=342", lambda: calculate_molar_mass("Al2(SO4)3"),     lambda v: abs(v-342)<0.5),
-        ("JMR K4Fe(CN)6.3H2O=422", lambda: calculate_molar_mass("K4Fe(CN)6.3H2O"), lambda v: abs(v-422)<0.5),
-        ("JMR FeSO4.7H2O=278",lambda: calculate_molar_mass("FeSO4.7H2O"),   lambda v: abs(v-278)<0.5),
-        ("JMR Cu(NO3)2=187.5",lambda: calculate_molar_mass("Cu(NO3)2"),      lambda v: abs(v-187.5)<0.1),
-        ("JMR Cu(NO3)2 Cu=64→188",lambda: calculate_molar_mass("Cu(NO3)2",{"Cu":64}), lambda v: abs(v-188)<0.1),
-        ("JMR C2H5OH=46",     lambda: calculate_molar_mass("C2H5OH"),        lambda v: abs(v-46)<0.1),
-        ("JMR CaSO4=136",     lambda: calculate_molar_mass("CaSO4"),         lambda v: abs(v-136)<0.1),
+    if task == "enthalpy":
+        return solve_enthalpy(data["Q_joule"], data["moles"])
 
-        # Stoich — pelbagai jenis input (UNIVERSAL)
-        ("Johor Q38: 2.1g C3H6→H2O=2.70g",
-         lambda: solve_stoichiometry("C3H6","H2O",2,6,given_mass_g=2.1,want="mass"),
-         lambda r: abs(r.get("result",0)-2.7)<0.01),
+    if task == "delta_h_from_calorimetry":
+        # Support both raw and pre-computed temperature keys
+        t_initial = data.get("temp_initial_raw") or data.get("temp_initial")
+        t_final   = data.get("temp_final_raw")   or data.get("temp_final")
+        return solve_delta_h_from_calorimetry(
+            data["mass_g"], t_initial, t_final, data["moles"],
+        )
 
-        ("Terengganu Q33: 9.2g C2H5OH→CO2=9.6dm³",
-         lambda: solve_stoichiometry("C2H5OH","CO2",1,2,given_mass_g=9.2,want="volume_rtp"),
-         lambda r: abs(r.get("result",0)-9.6)<0.2),
+    if task == "thermochemistry_type":
+        return solve_thermochemistry_type(
+            data["temp_initial"], data["temp_final"],
+        )
 
-        ("Terengganu Q37: 1.3dm³ CO2→O2=1.3dm³",
-         lambda: solve_stoichiometry("CO2","O2",6,6,given_vol_dm3=1.3,want="volume_dm3"),
-         lambda r: abs(r.get("result",0)-1.3)<0.05),
+    if task == "oxidation_number":
+        species = data.get("species")
+        if not species:
+            formulas = data.get("formulas") or []
+            if formulas:
+                species = max(formulas, key=len)
+        if not species:
+            raise ValueError("Spesies redoks tidak ditemui.")
+        return solve_oxidation_number(
+            species, data["target_element"], data.get("charge"),
+        )
 
-        ("Terengganu Q38: 25cm³ 0.5M Na2SO4→CaSO4=1.70g",
-         lambda: solve_stoichiometry("Na2SO4","CaSO4",1,1,given_molarity=0.5,given_solution_cm3=25,want="mass"),
-         lambda r: abs(r.get("result",0)-1.7)<0.05),
+    if task == "redox_change":
+        return solve_redox_change(
+            data["before_ox"], data["after_ox"], data.get("element", "Bahan"),
+        )
 
-        ("BugFix3: 0.5mol KI→PbI2=115.25g",
-         lambda: solve_stoichiometry("KI","PbI2",2,1,given_mol=0.5,want="mass"),
-         lambda r: abs(r.get("result",0)-115.25)<0.5),
-
-        ("Terengganu Q13: 1.6g CuO→Cu(NO3)2=3.76g [Cu=64]",
-         lambda: solve_stoichiometry("CuO","Cu(NO3)2",1,1,given_mass_g=1.6,want="mass",ar_override={"Cu":64}),
-         lambda r: abs(r.get("result",0)-3.76)<0.01),
-
-        # Thermochemistry
-        ("Johor Q36: ΔH=-42 kJ/mol",
-         lambda: solve_thermochemistry(delta_T=10,volume_cm3_total=100,molarity=2.0),
-         lambda r: abs(r.get("delta_H",0)-(-42))<1),
-
-        ("Terengganu Q34: Q=2100J→ΔT=10°C [REVERSE]",
-         lambda: solve_thermochemistry(Q_joules=2100,volume_cm3_total=50,want="delta_T"),
-         lambda r: abs(r.get("delta_T",0)-10)<0.1),
-
-        ("Johor Q5c: Q=924J (endotermik)",
-         lambda: solve_thermochemistry(delta_T=-11,volume_cm3_total=20,molarity=2.0),
-         lambda r: abs(r.get("Q_joules",0)-924)<1),
-
-        # pH
-        ("pH HCl 0.01 → pH=2",
-         lambda: solve_ph(0.01,"H+"),
-         lambda r: abs(r.get("pH",0)-2)<0.01),
-
-        ("Terengganu Q25: OH⁻ 0.5 → pH=13.7",
-         lambda: solve_ph(0.5,"OH-"),
-         lambda r: abs(r.get("pH",0)-13.7)<0.1),
-
-        ("pH NaOH 0.001 → pH=11",
-         lambda: solve_ph(0.001,"OH-"),
-         lambda r: abs(r.get("pH",0)-11)<0.01),
-
-        # Titration
-        ("TIT 1:1: 25cm³ NaOH 0.1M → M(HCl)=0.125",
-         lambda: solve_titration(25,0.1,v2_cm3=20),
-         lambda r: abs(r.get("M2",0)-0.125)<0.001),
-
-        ("TIT 1:2: Johor H2SO4+2NaOH → V=80cm³",
-         lambda: solve_titration(20,0.2,m2=0.1,coeff1=1,coeff2=2),
-         lambda r: abs(r.get("V2",0)-80)<1),
-
-        ("TIT Terengganu Q29: NaOH+H2SO4 → V=12.5cm³",
-         lambda: solve_titration(25,0.5,m2=0.5,coeff1=2,coeff2=1),
-         lambda r: abs(r.get("V2",0)-12.5)<0.1),
-
-        # Kepekatan
-        ("Concentration: 5.85g NaCl/500cm³ → 0.2 mol/dm³",
-         lambda: solve_concentration(5.85,500,"NaCl"),
-         lambda r: abs(r.get("conc_mol_dm3",0)-0.2)<0.01),
-
-        # Dilution
-        ("Dilution: 100cm³ 2M→500cm³ → 0.4 mol/dm³",
-         lambda: solve_dilution(2.0,100,v2_cm3=500),
-         lambda r: abs(r.get("M2",0)-0.4)<0.01),
-
-        # Voltaic cell
-        ("Voltaic Zn-Cu: +1.10V",
-         lambda: solve_voltaic_cell(0.34,-0.76),
-         lambda r: abs(r.get("e0_sel",0)-1.10)<0.01),
-
-        # Molarity from ΔH
-        ("MolFromDH: ΔH=-57.3,ΔT=7°C → 1.026 mol/dm³",
-         lambda: solve_molarity_from_dh(-57.3,7,100),
-         lambda r: abs(r.get("molarity",0)-1.026)<0.05),
-
-        # Relative Ar
-        ("Ar isotop Cl: [(35,75),(37,25)] → 35.5",
-         lambda: solve_relative_ar([(35,75),(37,25)]),
-         lambda r: abs(r.get("Ar",0)-35.5)<0.01),
-
-        # Mass from molarity
-        ("Mass from molarity: NaOH 0.1M/500cm³ → 2g",
-         lambda: solve_mass_from_molarity("NaOH",0.1,500),
-         lambda r: abs(r.get("mass_g",0)-2)<0.01),
-    ]
-
-    print("=" * 65)
-    print("  UNIVERSAL SPM SOLVER v3.4.0 — SELF TEST")
-    print(f"  {len(tests)} test cases | Johor + Terengganu + Pattern Umum")
-    print("=" * 65)
-
-    for name, fn, check in tests:
-        try:
-            r = fn()
-            if isinstance(r, (int, float)):
-                r = {"result": r}
-            ok = check(r)
-            status = P if ok else F
-            # Get any numeric result for display
-            val = (r.get("result") or r.get("delta_T") or r.get("pH") or
-                   r.get("delta_H") or r.get("V2") or r.get("M2") or
-                   r.get("Q_joules") or r.get("molarity") or r.get("Ar") or
-                   r.get("conc_mol_dm3") or r.get("e0_sel") or r.get("mass_g") or "?")
-            print(f"  {status}  {name} → {val}")
-            results.append(ok)
-        except Exception as e:
-            print(f"  {F}  {name} → ERROR: {e}")
-            results.append(False)
-
-    passed = sum(results)
-    total = len(results)
-    pct = passed/total*100
-    print(f"\n{'='*65}")
-    print(f"  KEPUTUSAN: {passed}/{total} ({pct:.0f}%)")
-    print(f"  {'🏆 SEMUA LULUS!' if passed==total else f'⚠️  {total-passed} gagal'}")
-    print("=" * 65)
-    return passed, total
-
-
-if __name__ == "__main__":
-    run_all_tests()
+    raise ValueError(f"Task '{task}' belum disokong.")
