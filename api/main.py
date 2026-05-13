@@ -372,6 +372,123 @@ async def setup_telegram(app_instance):
             except Exception as e:
                 await update.message.reply_text(f"Ralat: {e}")
 
+
+        async def cmd_quota(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            """
+            /quota — show Groq API quota and OCR usage live in Telegram.
+            Works for everyone; no admin check needed (quota info is not sensitive).
+            """
+            try:
+                # Pull from the in-process _app_state directly (no HTTP call needed)
+                lines = ["📊 <b>Status Sistem Cikgu AI Kimia</b>\n"]
+
+                # ── Groq quota ────────────────────────────────────────────
+                try:
+                    from groq_client import quota_status, _get_breaker, CBState
+                    qs = quota_status()
+
+                    model_labels = {
+                        "llama-3.3-70b-versatile":                     "Teori  (70B)",
+                        "llama-3.1-8b-instant":                        "Explain (8B)",
+                        "meta-llama/llama-4-scout-17b-16e-instruct":   "Vision (4-Scout)",
+                    }
+
+                    lines.append("🤖 <b>Groq API</b>")
+                    for model, info in qs.items():
+                        label    = model_labels.get(model, model[:20])
+                        used     = info["used"]
+                        limit    = info["limit"]
+                        remain   = info["remaining"]
+                        pct      = int(used / limit * 100) if limit else 0
+                        circuit  = info.get("circuit", "closed")
+                        failures = info.get("failures", 0)
+
+                        # Progress bar  ████░░░░ 42%
+                        filled = pct // 10
+                        bar    = "█" * filled + "░" * (10 - filled)
+
+                        status_icon = "🔴" if info["exhausted"] else ("🟡" if circuit == "open" else "🟢")
+                        circuit_txt = ""
+                        if circuit == "open":
+                            circuit_txt = " ⚡ Circuit OPEN — auto-reset in ~2min"
+                        elif circuit == "half_open":
+                            circuit_txt = " 🔄 Circuit testing..."
+
+                        lines.append(
+                            f"{status_icon} {label}\n"
+                            f"   {bar} {pct}%\n"
+                            f"   Digunakan: {used}/{limit} ({remain} baki){circuit_txt}"
+                        )
+                        if failures > 0:
+                            lines.append(f"   ⚠️ Kegagalan berturut: {failures}")
+
+                except ImportError:
+                    lines.append("⚠️ groq_client tidak tersedia")
+
+                lines.append("")
+
+                # ── OCR quota ─────────────────────────────────────────────
+                try:
+                    from quota_guard import get_quota_guard
+                    guard  = get_quota_guard()
+                    status = guard.status()
+                    ocr    = status.get("ocr_global_daily", {})
+                    used   = ocr.get("used", 0)
+                    limit  = ocr.get("limit", 800)
+                    remain = ocr.get("remaining", limit)
+                    pct    = int(used / limit * 100) if limit else 0
+                    filled = pct // 10
+                    bar    = "█" * filled + "░" * (10 - filled)
+                    icon   = "🔴" if used >= limit else ("🟡" if pct >= 80 else "🟢")
+                    cfg    = status.get("config", {})
+                    lines.append("📷 <b>OCR (Gambar)</b>")
+                    lines.append(
+                        f"{icon} Gambar hari ini: {bar} {pct}%\n"
+                        f"   Digunakan: {used}/{limit} ({remain} baki)\n"
+                        f"   Had/pengguna: {cfg.get('ocr_user_daily_limit','?')} sehari, "
+                        f"{cfg.get('ocr_user_hourly_limit','?')} sejam"
+                    )
+                except ImportError:
+                    lines.append("⚠️ quota_guard tidak tersedia")
+
+                lines.append("")
+
+                # ── Component status ──────────────────────────────────────
+                lines.append("⚙️ <b>Komponen</b>")
+                comp_icons = {
+                    "embedder":  ("✅","❌"),
+                    "retriever": ("✅","❌"),
+                    "solve_fn":  ("✅","❌"),
+                    "route_fn":  ("✅","❌"),
+                    "memory_ok": ("✅","❌"),
+                }
+                comp_labels = {
+                    "embedder":  "RAG Embedder",
+                    "retriever": "FAISS Retriever",
+                    "solve_fn":  "Solver",
+                    "route_fn":  "Router",
+                    "memory_ok": "Firebase Memory",
+                }
+                for key, (ok_icon, fail_icon) in comp_icons.items():
+                    val   = _app_state.get(key)
+                    icon  = ok_icon if val else fail_icon
+                    label = comp_labels.get(key, key)
+                    lines.append(f"  {icon} {label}")
+
+                lines.append("")
+                lines.append("<i>Quota reset setiap tengah malam UTC.</i>")
+                lines.append("<i>Taip soalan terus — tiada had untuk soalan teks.</i>")
+
+                msg = "\n".join(lines)
+                await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+
+            except Exception as e:
+                logger.error(f"cmd_quota error: {e}")
+                await update.message.reply_text(
+                    "⚠️ Tidak dapat mendapatkan status quota sekarang.",
+                    parse_mode=ParseMode.HTML,
+                )
+
         async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             query = update.callback_query
             await query.answer()
@@ -607,6 +724,7 @@ SOALAN:
         telegram_app.add_handler(CommandHandler("solve", cmd_solve))
         telegram_app.add_handler(CommandHandler("clear", cmd_clear))
         telegram_app.add_handler(CommandHandler("stats", cmd_stats))
+        telegram_app.add_handler(CommandHandler("quota", cmd_quota))
         telegram_app.add_handler(CallbackQueryHandler(button_handler))
         telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
