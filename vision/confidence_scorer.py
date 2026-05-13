@@ -1,344 +1,392 @@
 """
-vision/confidence_scorer.py — Cikgu AI Kimia
-==============================================
+vision/confidence_scorer.py — Cikgu AI Kimia  [PRODUCTION HARDENING v4.0]
+==========================================================================
+REPLACES: existing vision/confidence_scorer.py  (adds Groq-aware scoring)
+
 Chemistry-aware OCR confidence scoring.
+Zero LLM calls — pure deterministic Python.
 
-Scores extracted text on 0.0–1.0 scale by checking:
-  1. Structural completeness  — does text look like a question?
-  2. Formula integrity        — are detected formulas chemically valid?
-  3. Numeric integrity        — are numbers sensible (not garbled)?
-  4. Equation integrity       — if equation present, is it parseable?
-  5. OCR garbage signals      — high non-ASCII, repeated chars, etc.
+SCORING ALGORITHM (0.0 – 1.0):
 
-Thresholds:
-  ≥ 0.70  → HIGH   — proceed to solver pipeline normally
-  0.45–0.69 → MEDIUM — show extracted text to user, ask to confirm
-  < 0.45  → LOW    — ask user to retype or send clearer image
+  Score starts at BASE_SCORE (0.50).
+  Positive signals add to score (up to +0.50 total).
+  Negative signals subtract from score (down to 0.0).
 
-This module does NOT call any LLM. Pure deterministic scoring.
+  POSITIVE SIGNALS (+):
+    +0.15  Has chemistry keyword (mol, jisim, pH, etc.)
+    +0.10  Has valid chemical formula (H2O, NaOH, etc.)
+    +0.10  Has numeric value with unit (50 cm³, 2.0 mol/dm³)
+    +0.08  Has chemical equation (arrow present: A -> B)
+    +0.05  Has calculation type keyword (hitungkan, calculate)
+    +0.05  Text length is reasonable (15–500 chars for a question)
+    +0.03  Has Groq structured format markers (SOALAN:, DATA_NOMBOR:)
+
+  NEGATIVE SIGNALS (−):
+    −0.30  Garbage pattern detected (repeated chars, high non-ASCII)
+    −0.20  Contains malformed formula (unknown elements, broken bracket)
+    −0.15  Very short text (< 10 chars)
+    −0.10  No chemistry keyword AND no numeric value
+    −0.08  Malformed equation (unbalanced brackets, invalid arrow)
+    −0.05  Too long (> 1500 chars — OCR over-extracted junk)
+
+THRESHOLDS:
+  ≥ 0.70  HIGH    → proceed to solver pipeline normally
+  0.45–0.69  MEDIUM → show preview to user, ask to confirm
+  < 0.45  LOW     → ask user to retype or send clearer image
+
+SOURCE ADJUSTMENT:
+  groq_vision:  no penalty  (already an LLM output, structurally correct)
+  local_ocr:   −0.10 penalty (raw OCR output, higher noise floor)
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
-# ── Threshold constants ────────────────────────────────────────────────────
+# ── Thresholds ──────────────────────────────────────────────────────────────
 CONF_HIGH   = 0.70
 CONF_MEDIUM = 0.45
 
-
-@dataclass
-class ConfidenceResult:
-    score: float                   # 0.0 – 1.0
-    tier: str                      # "high" | "medium" | "low"
-    signals: List[str]             # human-readable reasons
-    proceed: bool                  # True = safe to run solver
-    ask_confirm: bool              # True = show preview, ask user to confirm
-    ask_retype: bool               # True = image too bad, ask user to retype
-
-
-# ── Known valid chemistry elements ────────────────────────────────────────
+# ── Known valid SPM chemistry elements ──────────────────────────────────────
 _VALID_ELEMENTS = {
     "H","He","Li","Be","B","C","N","O","F","Ne",
     "Na","Mg","Al","Si","P","S","Cl","Ar",
     "K","Ca","Sc","Ti","V","Cr","Mn","Fe","Co","Ni","Cu","Zn",
-    "Ga","Ge","As","Se","Br","Kr","Rb","Sr","Y","Zr",
-    "Ag","Sn","I","Ba","Pb","Hg","Au","Pt",
+    "Ga","Ge","As","Se","Br","Kr","Rb","Sr","Y","Zr","Nb","Mo",
+    "Ag","Cd","In","Sn","Sb","Te","I","Xe",
+    "Cs","Ba","La","Ce","Hf","Ta","W","Re","Os","Ir","Pt","Au","Hg",
+    "Tl","Pb","Bi","Po","At","Rn","Fr","Ra","Ac","Th","U",
 }
 
-# Common SPM chemistry formula patterns (positive indicators)
-_FORMULA_PATTERN   = re.compile(r'\b[A-Z][a-z]?\d*(?:\([A-Za-z0-9]+\)\d*)*[A-Za-z0-9]*\b')
-_EQUATION_PATTERN  = re.compile(r'.{2,}\s*->\s*.{2,}')
-_NUMBER_PATTERN    = re.compile(r'\b\d+(?:\.\d+)?\s*(?:g|mol|dm3|cm3|kJ|J|°C|M|V|%)\b', re.IGNORECASE)
+# SPM-relevant formulas that commonly appear in questions
+_COMMON_SPM_FORMULAS = {
+    "H2O","HCl","NaOH","KOH","H2SO4","HNO3","Na2SO4","CaCO3",
+    "CuSO4","FeCl3","NH3","CO2","SO2","NO2","CH4","C2H5OH",
+    "NaCl","MgO","CaO","Fe2O3","Al2O3","KMnO4","Na2CO3",
+    "NaHCO3","Ca(OH)2","NH4Cl","CaCl2","MgCl2","ZnSO4",
+    "K2Cr2O7","Na2S2O3","K4Fe(CN)6",
+}
 
-# OCR garbage signals
+# ── Compiled patterns ────────────────────────────────────────────────────────
+_FORMULA_PATTERN  = re.compile(
+    r'\b[A-Z][a-z]?\d*(?:\([A-Za-z0-9]+\)\d*)*[A-Za-z0-9]*\b'
+)
+_EQUATION_PATTERN = re.compile(r'.{2,}\s*->\s*.{2,}')
+_NUMBER_WITH_UNIT = re.compile(
+    r'\b\d+(?:\.\d+)?\s*(?:g|mol|dm3|cm3|kJ|J|°C|M|V|%|dm|cm|L|l)\b',
+    re.IGNORECASE
+)
 _GARBAGE_PATTERNS = [
-    re.compile(r'(.)\1{4,}'),          # "aaaaa" — repeated chars
-    re.compile(r'[^\x00-\x7F]{5,}'),   # 5+ consecutive non-ASCII
-    re.compile(r'[|\\]{3,}'),           # table borders misread as chars
-    re.compile(r'\b[A-Z]{8,}\b'),       # random all-caps word ≥8 chars
+    re.compile(r'(.)\1{5,}'),          # aaaaa — repeated chars
+    re.compile(r'[^\x00-\x7F]{6,}'),   # 6+ consecutive non-ASCII
+    re.compile(r'[|\\]{4,}'),           # table borders
+    re.compile(r'\b[A-Z]{10,}\b'),      # random all-caps ≥10 chars
+    re.compile(r'[\x00-\x08\x0b-\x1f\x7f]'),  # control chars
 ]
 
-# Expected chemistry keywords (at least one should appear for chemistry question)
 _CHEM_KEYWORDS_BM = [
-    "mol", "jisim", "isipadu", "kepekatan", "kemolaran",
-    "hitungkan", "tentukan", "kira", "berapakah", "nyatakan",
-    "ph", "poh", "entalpi", "enthalpi", "termokimia",
-    "titrasi", "stoikiometri", "formula", "persamaan",
-    "asid", "bes", "garam", "larutan", "tindak balas",
-    "kadar", "pengoksidaan", "penurunan", "elektrod",
+    "mol","jisim","isipadu","kepekatan","kemolaran",
+    "hitungkan","tentukan","kira","berapakah","nyatakan",
+    "ph","poh","entalpi","enthalpi","termokimia",
+    "titrasi","stoikiometri","formula","persamaan",
+    "asid","bes","garam","larutan","tindak balas",
+    "kadar","pengoksidaan","penurunan","elektrod",
+    "unsur","sebatian","ion","elektron","proton",
+    "nombor oxidasi","jmr","ar",
 ]
 _CHEM_KEYWORDS_EN = [
-    "mol", "mass", "volume", "concentration", "molarity",
-    "calculate", "determine", "find", "what is",
-    "ph", "poh", "enthalpy", "thermochem",
-    "titration", "stoichiometry", "formula", "equation",
-    "acid", "base", "salt", "solution", "reaction",
-    "rate", "oxidation", "reduction", "electrode",
+    "mol","mass","volume","concentration","molarity",
+    "calculate","determine","find","what is","state",
+    "ph","poh","enthalpy","thermochem",
+    "titration","stoichiometry","formula","equation",
+    "acid","base","salt","solution","reaction",
+    "rate","oxidation","reduction","electrode",
+    "element","compound","ion","electron","proton",
+    "relative","molar","empirical",
 ]
 
-
-def _detect_garbled(text: str) -> List[str]:
-    """Return list of garbage signal descriptions found in text."""
-    found = []
-    for pat in _GARBAGE_PATTERNS:
-        m = pat.search(text)
-        if m:
-            found.append(f"garbage_pattern:'{m.group()[:20]}'")
-    return found
+# Groq structured format markers (strong positive signal)
+_GROQ_MARKERS = ["SOALAN:", "PILIHAN:", "DATA_NOMBOR:", "FORMULA_KIMIA:",
+                  "PERSAMAAN_KIMIA:", "JENIS_PENGIRAAN:", "QUESTION:", "OPTIONS:"]
 
 
-def _score_formulas(text: str) -> tuple[float, List[str]]:
+# ═══════════════════════════════════════════════════════════════════════════════
+# RESULT DATACLASS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class ConfidenceResult:
+    score:        float        # 0.0 – 1.0
+    tier:         str          # "high" | "medium" | "low"
+    signals:      List[str]    # human-readable scoring log
+    proceed:      bool         # safe to pass to solver
+    ask_confirm:  bool         # show preview, ask user to confirm
+    ask_retype:   bool         # image too bad, ask user to retype
+    source:       str = ""     # "groq_vision" | "local_ocr"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FORMULA VALIDATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _is_valid_formula(formula: str) -> bool:
     """
-    Extract apparent chemistry formulas and check element validity.
-    Returns (score_component, signals).
+    Check if a string is a plausible chemical formula.
+    Validates that all element symbols are in the known SPM element set.
+    Does not validate stoichiometric correctness (that's the solver's job).
     """
+    # Strip state symbols: (aq), (s), (l), (g)
+    clean = re.sub(r'\((aq|s|l|g)\)', '', formula, flags=re.IGNORECASE)
+    # Strip charge notation: 2-, +, 3+
+    clean = re.sub(r'[\^]?[0-9]*[+-]$', '', clean.strip())
+
+    # Extract all element symbols
+    elements = re.findall(r'[A-Z][a-z]?', clean)
+    if not elements:
+        return False
+
+    for elem in elements:
+        if elem not in _VALID_ELEMENTS:
+            return False
+
+    return True
+
+
+def _detect_formulas(text: str) -> List[str]:
+    """Extract all plausible chemical formula tokens from text."""
     candidates = _FORMULA_PATTERN.findall(text)
-    if not candidates:
-        return 0.5, []   # neutral — not all questions have formulas
-
-    valid_count   = 0
-    invalid_found = []
-
-    for cand in candidates[:10]:   # check first 10 candidates
-        # Extract first element symbol
-        elem_match = re.match(r'([A-Z][a-z]?)', cand)
-        if not elem_match:
-            continue
-        elem = elem_match.group(1)
-        if elem in _VALID_ELEMENTS:
-            valid_count += 1
-        else:
-            # Could be OCR artifact, BM word start, or genuinely unknown
-            if len(cand) > 1 and cand[0].isupper():
-                invalid_found.append(cand)
-
-    # Ratio of valid vs total detected
-    total = max(len(candidates), 1)
-    ratio = valid_count / total
-
-    signals = []
-    if invalid_found:
-        signals.append(f"suspect_formula:{invalid_found[:3]}")
-
-    if ratio >= 0.7:
-        return 0.9, signals
-    elif ratio >= 0.4:
-        return 0.6, signals
-    else:
-        return 0.3, signals + ["low_formula_validity"]
+    valid = []
+    for c in candidates:
+        if c in _COMMON_SPM_FORMULAS or _is_valid_formula(c):
+            valid.append(c)
+    return valid
 
 
-def _score_numbers(text: str) -> tuple[float, List[str]]:
-    """Check numeric values have sensible units and ranges."""
-    matches = _NUMBER_PATTERN.findall(text)
-    signals = []
-
-    if not matches:
-        # No numeric values — may be theory question, not suspicious
-        return 0.6, []
-
-    # Check for obviously garbled numbers (e.g., "1.2.3g", "0.0.1mol")
-    bad_numbers = re.findall(r'\d+\.\d+\.\d+', text)
-    if bad_numbers:
-        signals.append(f"malformed_number:{bad_numbers[:2]}")
-        return 0.3, signals
-
-    return 0.85, signals
-
-
-def _score_question_structure(text: str) -> tuple[float, List[str]]:
+def _detect_malformed_formula(text: str) -> Optional[str]:
     """
-    Does the text look like a complete chemistry question?
-    Awards score for: question words, reasonable length, chemistry keywords.
+    Detect obviously malformed chemistry notation.
+    Returns a description of the problem, or None if no issue detected.
     """
-    signals = []
-    tl      = text.lower()
+    # Unbalanced brackets
+    if text.count("(") != text.count(")"):
+        return "unbalanced_parentheses"
+    if text.count("[") != text.count("]"):
+        return "unbalanced_brackets"
 
-    # Minimum length
-    if len(text) < 10:
-        return 0.1, ["text_too_short"]
-    if len(text) < 25:
-        signals.append("text_very_short")
-        return 0.3, signals
+    # Known OCR corruption patterns
+    ocr_corruptions = [
+        (r'\b[A-Z]\d[A-Z](?!\w)', "possible_digit_for_letter"),   # H2C → H2Cl?
+        (r'\b[0-9][A-Z][0-9]\b',   "number_letter_number"),         # likely garbage
+        (r'\b[a-z]{4,}\b',         "all_lowercase_long_word"),       # OCR lost caps
+    ]
+    for pat, reason in ocr_corruptions:
+        if re.search(pat, text):
+            return reason
 
-    # Chemistry keyword presence
-    all_kw    = _CHEM_KEYWORDS_BM + _CHEM_KEYWORDS_EN
-    kw_hits   = sum(1 for kw in all_kw if kw in tl)
-
-    if kw_hits >= 3:
-        kw_score = 1.0
-    elif kw_hits == 2:
-        kw_score = 0.8
-    elif kw_hits == 1:
-        kw_score = 0.6
-        signals.append("few_chemistry_keywords")
-    else:
-        kw_score = 0.3
-        signals.append("no_chemistry_keywords")
-
-    # Question structure — has a verb (asking something)
-    question_verbs = ["hitungkan","kira","tentukan","berapakah","calculate",
-                      "find","determine","what","which","why","explain"]
-    has_verb = any(v in tl for v in question_verbs)
-    if not has_verb:
-        signals.append("no_question_verb")
-        kw_score *= 0.8
-
-    return min(kw_score, 1.0), signals
+    return None
 
 
-def _score_non_ascii_ratio(text: str) -> tuple[float, List[str]]:
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN SCORING FUNCTION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def score_ocr_confidence(text: str, source: str = "unknown") -> ConfidenceResult:
     """
-    High ratio of unexpected non-ASCII = OCR garbling.
-    Chemistry allows: ΔHΩ°→⇌ and subscript/superscript digits.
-    """
-    allowed_special = set("°ΔΩμ→⇌⁺⁻₀₁₂₃₄₅₆₇₈₉⁰¹²³⁴⁵⁶⁷⁸⁹")
-    bad_chars = [c for c in text
-                 if ord(c) > 127 and c not in allowed_special]
-    ratio = len(bad_chars) / max(len(text), 1)
+    Score extracted OCR text for chemistry relevance and quality.
 
-    if ratio > 0.25:
-        return 0.1, [f"high_non_ascii_ratio:{ratio:.2f}"]
-    if ratio > 0.10:
-        return 0.5, [f"moderate_non_ascii_ratio:{ratio:.2f}"]
-    return 1.0, []
+    Args:
+        text:   The extracted text from Groq Vision or local OCR.
+        source: "groq_vision" | "local_ocr" | "unknown"
 
-
-def _score_equation(text: str) -> tuple[float, List[str]]:
-    """If an equation is present, verify it has identifiable LHS and RHS."""
-    if '->' not in text and '→' not in text and '<->' not in text:
-        return 0.7, []   # neutral — not all questions have equations
-
-    parts = re.split(r'->|→|<->', text)
-    if len(parts) < 2:
-        return 0.4, ["equation_missing_rhs"]
-
-    lhs = parts[0].strip().split()[-3:]   # last 3 words of LHS
-    rhs = parts[1].strip().split()[:3]    # first 3 words of RHS
-
-    lhs_str = " ".join(lhs)
-    rhs_str = " ".join(rhs)
-
-    # Both sides should have at least one capital letter (formula)
-    has_caps_lhs = any(c.isupper() for c in lhs_str)
-    has_caps_rhs = any(c.isupper() for c in rhs_str)
-
-    if has_caps_lhs and has_caps_rhs:
-        return 0.9, []
-    else:
-        return 0.5, [f"equation_suspect_lhs='{lhs_str}' rhs='{rhs_str}'"]
-
-
-# ── Composite Scorer ───────────────────────────────────────────────────────
-
-def score_ocr_confidence(
-    text: str,
-    source: str = "unknown",   # "groq_vision" | "tesseract" | "paddle"
-) -> ConfidenceResult:
-    """
-    Compute overall OCR confidence for extracted chemistry question text.
-
-    Weights:
-      - Structure:    25%
-      - Formula:      25%
-      - Numbers:      15%
-      - Non-ASCII:    20%
-      - Equation:     10%
-      - Garbage:       5% (penalty only)
-
-    source="groq_vision" gets a small bonus (model understands context).
+    Returns:
+        ConfidenceResult with score, tier, and action flags.
     """
     signals: List[str] = []
+    score = 0.50   # base
 
-    # ── Individual component scores ────────────────────────────────────
-    s_struct,   sig1 = _score_question_structure(text)
-    s_formula,  sig2 = _score_formulas(text)
-    s_numbers,  sig3 = _score_numbers(text)
-    s_nonascii, sig4 = _score_non_ascii_ratio(text)
-    s_equation, sig5 = _score_equation(text)
+    if not text or not text.strip():
+        return ConfidenceResult(
+            score=0.0, tier="low", signals=["empty_text"],
+            proceed=False, ask_confirm=False, ask_retype=True,
+            source=source,
+        )
 
-    signals += sig1 + sig2 + sig3 + sig4 + sig5
+    text_lower = text.lower()
+    text_len   = len(text)
 
-    # ── Garbage penalty ────────────────────────────────────────────────
-    garbage_sigs = _detect_garbled(text)
-    signals += garbage_sigs
-    garbage_penalty = 0.4 * len(garbage_sigs)   # each garbage signal costs 0.4
+    # ── SOURCE PENALTY ──────────────────────────────────────────────────────
+    if source == "local_ocr":
+        score -= 0.10
+        signals.append("source_penalty=local_ocr(-0.10)")
+    elif source == "groq_vision":
+        # No penalty — LLM output is structurally cleaner
+        signals.append("source=groq_vision(no_penalty)")
 
-    # ── Weighted composite ─────────────────────────────────────────────
-    raw_score = (
-        0.25 * s_struct   +
-        0.25 * s_formula  +
-        0.15 * s_numbers  +
-        0.20 * s_nonascii +
-        0.15 * s_equation
-    )
+    # ── GARBAGE DETECTION ───────────────────────────────────────────────────
+    garbage_hits = 0
+    for gp in _GARBAGE_PATTERNS:
+        if gp.search(text):
+            garbage_hits += 1
 
-    # Source bonus: Groq Vision generally more reliable than Tesseract
-    if source == "groq_vision":
-        raw_score = min(raw_score + 0.05, 1.0)
-    elif source == "paddle":
-        raw_score = min(raw_score + 0.02, 1.0)
+    if garbage_hits >= 2:
+        score -= 0.30
+        signals.append(f"garbage_patterns={garbage_hits}(-0.30)")
+    elif garbage_hits == 1:
+        score -= 0.15
+        signals.append(f"garbage_pattern=1(-0.15)")
 
-    final_score = max(0.0, raw_score - garbage_penalty)
-    final_score = round(final_score, 3)
+    # ── TEXT LENGTH ─────────────────────────────────────────────────────────
+    if text_len < 10:
+        score -= 0.15
+        signals.append(f"very_short_text(len={text_len})(-0.15)")
+    elif text_len < 20:
+        score -= 0.05
+        signals.append(f"short_text(len={text_len})(-0.05)")
+    elif 20 <= text_len <= 500:
+        score += 0.05
+        signals.append(f"good_length(len={text_len})(+0.05)")
+    elif text_len > 1500:
+        score -= 0.05
+        signals.append(f"too_long(len={text_len})(-0.05)")
 
-    # ── Tier classification ────────────────────────────────────────────
-    if final_score >= CONF_HIGH:
-        tier, proceed, ask_confirm, ask_retype = "high",   True,  False, False
-    elif final_score >= CONF_MEDIUM:
-        tier, proceed, ask_confirm, ask_retype = "medium", True,  True,  False
+    # ── GROQ STRUCTURED FORMAT MARKERS ─────────────────────────────────────
+    groq_markers_found = [m for m in _GROQ_MARKERS if m in text.upper()]
+    if len(groq_markers_found) >= 3:
+        score += 0.10   # strong positive: structured Groq output
+        signals.append(f"groq_markers={len(groq_markers_found)}(+0.10)")
+    elif len(groq_markers_found) >= 1:
+        score += 0.05
+        signals.append(f"groq_marker=1(+0.05)")
+
+    # ── CHEMISTRY KEYWORDS ──────────────────────────────────────────────────
+    bm_hits = sum(1 for kw in _CHEM_KEYWORDS_BM if kw in text_lower)
+    en_hits = sum(1 for kw in _CHEM_KEYWORDS_EN if kw in text_lower)
+    chem_hits = max(bm_hits, en_hits)
+
+    if chem_hits >= 3:
+        score += 0.15
+        signals.append(f"chem_keywords={chem_hits}(+0.15)")
+    elif chem_hits >= 1:
+        score += 0.08
+        signals.append(f"chem_keyword=1(+0.08)")
     else:
-        tier, proceed, ask_confirm, ask_retype = "low",    False, False, True
+        score -= 0.10
+        signals.append("no_chem_keywords(-0.10)")
+
+    # ── CHEMICAL FORMULAS ────────────────────────────────────────────────────
+    formulas = _detect_formulas(text)
+    if len(formulas) >= 2:
+        score += 0.10
+        signals.append(f"valid_formulas={formulas[:3]}(+0.10)")
+    elif len(formulas) == 1:
+        score += 0.05
+        signals.append(f"valid_formula=1(+0.05)")
+
+    # Malformed formula check
+    malformed = _detect_malformed_formula(text)
+    if malformed:
+        score -= 0.20
+        signals.append(f"malformed_formula={malformed}(-0.20)")
+
+    # ── NUMERIC VALUES WITH UNITS ────────────────────────────────────────────
+    unit_matches = _NUMBER_WITH_UNIT.findall(text)
+    if len(unit_matches) >= 2:
+        score += 0.10
+        signals.append(f"numeric_with_units={len(unit_matches)}(+0.10)")
+    elif len(unit_matches) == 1:
+        score += 0.05
+        signals.append(f"numeric_with_unit=1(+0.05)")
+
+    # ── EQUATION DETECTION ───────────────────────────────────────────────────
+    if _EQUATION_PATTERN.search(text):
+        score += 0.08
+        signals.append("equation_detected(+0.08)")
+
+    # ── CALCULATION KEYWORDS ─────────────────────────────────────────────────
+    calc_keywords = [
+        "hitungkan","calculate","berapakah","find","hitung","tentukan",
+        "determine","nilai","value",
+    ]
+    if any(kw in text_lower for kw in calc_keywords):
+        score += 0.05
+        signals.append("calculation_keyword(+0.05)")
+
+    # ── CLAMP ────────────────────────────────────────────────────────────────
+    score = max(0.0, min(1.0, score))
+
+    # ── DETERMINE TIER ───────────────────────────────────────────────────────
+    if score >= CONF_HIGH:
+        tier         = "high"
+        proceed      = True
+        ask_confirm  = False
+        ask_retype   = False
+    elif score >= CONF_MEDIUM:
+        tier         = "medium"
+        proceed      = False
+        ask_confirm  = True
+        ask_retype   = False
+    else:
+        tier         = "low"
+        proceed      = False
+        ask_confirm  = False
+        ask_retype   = True
 
     return ConfidenceResult(
-        score=final_score,
+        score=round(score, 3),
         tier=tier,
         signals=signals,
         proceed=proceed,
         ask_confirm=ask_confirm,
         ask_retype=ask_retype,
+        source=source,
     )
 
 
-def format_confidence_warning(result: ConfidenceResult, lang: str = "BM") -> Optional[str]:
-    """
-    Return a user-facing warning message if confidence is not HIGH.
-    Returns None if confidence is high (no message needed).
-    """
-    if result.tier == "high":
-        return None
+# ═══════════════════════════════════════════════════════════════════════════════
+# USER MESSAGES
+# ═══════════════════════════════════════════════════════════════════════════════
 
+def medium_confidence_message(extracted_text: str, lang: str = "BM") -> str:
+    """
+    Message shown to user when OCR confidence is MEDIUM.
+    Shows a preview of what was extracted and asks for confirmation.
+    """
+    preview = extracted_text[:200] + ("..." if len(extracted_text) > 200 else "")
     if lang == "BM":
-        if result.ask_retype:
-            return (
-                "⚠️ _Maaf, Cikgu AI tidak dapat membaca soalan dengan jelas._\n\n"
-                "Sila cuba:\n"
-                "• 📸 Hantar gambar yang lebih jelas dan terang\n"
-                "• ✍️ Taip soalan dalam teks terus\n"
-                "• 🔍 Pastikan soalan tidak kabur atau miring"
-            )
-        else:  # medium
-            return (
-                "📋 _Soalan yang Cikgu AI baca:_\n\n"
-                "{preview}\n\n"
-                "_Adakah soalan ini betul? Jawab 'ya' untuk teruskan atau "
-                "taip semula soalan anda._"
-            )
+        return (
+            f"📷 Cikgu AI telah baca gambar ini:\n\n"
+            f"<code>{preview}</code>\n\n"
+            f"Adakah ini betul? Jawab:\n"
+            f"  ✅ <b>Ya</b> — teruskan penyelesaian\n"
+            f"  ✏️ <b>Tidak</b> — taip soalan dalam teks"
+        )
     else:
-        if result.ask_retype:
-            return (
-                "⚠️ _Sorry, I couldn't read the question clearly._\n\n"
-                "Please try:\n"
-                "• 📸 Send a clearer, well-lit photo\n"
-                "• ✍️ Type the question as text\n"
-                "• 🔍 Make sure the image is sharp and upright"
-            )
-        else:
-            return (
-                "📋 _Question I detected:_\n\n"
-                "{preview}\n\n"
-                "_Is this correct? Reply 'yes' to continue or retype your question._"
-            )
+        return (
+            f"📷 I extracted this from your image:\n\n"
+            f"<code>{preview}</code>\n\n"
+            f"Is this correct?\n"
+            f"  ✅ <b>Yes</b> — proceed with solution\n"
+            f"  ✏️ <b>No</b> — please type the question as text"
+        )
+
+
+def low_confidence_message(lang: str = "BM") -> str:
+    """Message shown when OCR confidence is LOW."""
+    if lang == "BM":
+        return (
+            "📷 Maaf, gambar kurang jelas untuk dibaca dengan tepat.\n\n"
+            "Sila cuba:\n"
+            "  1️⃣ Hantar gambar yang lebih jelas\n"
+            "  2️⃣ Taip soalan terus dalam teks\n\n"
+            "Tip: cahaya yang baik + kamera tegak = gambar yang lebih jelas 📸"
+        )
+    else:
+        return (
+            "📷 Sorry, the image is unclear for accurate reading.\n\n"
+            "Please try:\n"
+            "  1️⃣ Send a clearer image\n"
+            "  2️⃣ Type the question as text\n\n"
+            "Tip: good lighting + straight camera angle = clearer image 📸"
+        )

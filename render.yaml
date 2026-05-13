@@ -10,7 +10,7 @@ services:
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL
-        value: llama-3.1-70b-versatile
+        value: llama-3.3-70b-versatile
       - key: FAISS_INDEX_DIR
         value: ./faiss_indexes
       - key: KB_DIR
@@ -21,6 +21,10 @@ services:
         value: "3000"
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: VISION_PROVIDER
+        value: groq
+      - key: LOG_LEVEL
+        value: INFO
 
   # ── Telegram Bot Worker ──────────────────────────────────────────────────
   - type: worker

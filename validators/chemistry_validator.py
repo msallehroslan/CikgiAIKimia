@@ -1,25 +1,31 @@
 """
-validators/chemistry_validator.py — Cikgu AI Kimia
-====================================================
-Deterministic chemistry validation layer.
+validators/chemistry_validator.py — Cikgu AI Kimia  [v4.0 — FULL REWRITE]
+==========================================================================
+REPLACES: existing validators/chemistry_validator.py
 
-Three validator classes + one integration wrapper:
+WHAT WAS WRONG IN THE OLD VERSION (6 bugs fixed):
+  BUG 1 — OCR errors H20, NaC1, Fe203 passed FormulaValidator as OK
+  BUG 2 — EquationValidator completely missing
+  BUG 3 — Negative mass/volume only WARNING, should be CRITICAL
+  BUG 4 — AnswerValidator never triggered (solver returns str, validator needs dict)
+  BUG 5 — validate_extraction only checked 3 fields, missing equation/species
+  BUG 6 — ValidationReport missing user_message() for bot reply
 
-  FormulaValidator   — checks chemical formulas from extractor
-  UnitValidator      — checks numeric values and units are sensible
-  AnswerValidator    — sanity-checks solver output before returning
-  ChemistryValidator — combines all three, used in main pipeline
+MODULE STRUCTURE:
+  OCRCorrector        <- corrects 40+ known OCR formula errors
+  FormulaValidator    <- validates formula strings (uses OCRCorrector)
+  EquationValidator   <- validates equation strings [NEW]
+  UnitValidator       <- validates numeric values (negative -> CRITICAL)
+  AnswerValidator     <- validates solver output (str OR dict) [FIXED]
+  ChemistryValidator  <- integration wrapper used by main.py
 
-Usage in main pipeline (after extractor, before solver):
-  from validators.chemistry_validator import ChemistryValidator
-  cv = ChemistryValidator()
-  issues = cv.validate_extraction(task, data)
-  if issues.has_critical:
-      return fallback_message(...)
-  solver_result = solve_by_task(task, data)
-  issues2 = cv.validate_answer(task, solver_result)
-
-Zero external dependencies — pure Python.
+INTEGRATION FLOW (main.py):
+  data = cv.correct_ocr(data)               <- NEW step
+  pre  = cv.validate_extraction(task, data)
+  if pre.has_critical:
+      return pre.user_message(lang)         <- NEW method
+  answer_str = solve_by_task(task, data)
+  post = cv.validate_answer(task, answer_str)  <- now accepts str
 """
 
 from __future__ import annotations
@@ -27,42 +33,49 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-# ── Import AR table from single source ────────────────────────────────────
-# solver/constants.py must exist (see audit recommendation)
-# Fallback to inline table if not yet refactored
+# AR table -- import from formula_parser (shared with solver), fallback inline
 try:
-    from solver.constants import AR
+    from formula_parser import ATOMIC_MASS as AR, parse_formula as _parse_formula
+    _HAS_FORMULA_PARSER = True
 except ImportError:
-    AR = {
+    _HAS_FORMULA_PARSER = False
+    AR: Dict[str, float] = {
         "H":1.0,"He":4.0,"Li":7.0,"Be":9.0,"B":11.0,"C":12.0,"N":14.0,
         "O":16.0,"F":19.0,"Ne":20.0,"Na":23.0,"Mg":24.0,"Al":27.0,"Si":28.0,
         "P":31.0,"S":32.0,"Cl":35.5,"Ar":40.0,"K":39.0,"Ca":40.0,
         "Ti":48.0,"V":51.0,"Cr":52.0,"Mn":55.0,"Fe":56.0,"Co":59.0,
         "Ni":58.7,"Cu":63.5,"Zn":65.0,"As":75.0,"Se":79.0,"Br":80.0,
         "Kr":84.0,"Ag":108.0,"Sn":118.7,"I":127.0,"Ba":137.0,
-        "Hg":200.6,"Pb":207.0,
+        "Hg":200.6,"Pb":207.0,"Au":197.0,"Pt":195.0,
     }
 
 VALID_ELEMENTS = set(AR.keys())
 
-# ── Validation result ──────────────────────────────────────────────────────
+
+# =============================================================================
+# RESULT DATA STRUCTURES
+# =============================================================================
 
 @dataclass
 class ValidationIssue:
-    severity: str        # "critical" | "warning" | "info"
-    code: str            # machine-readable code
-    message: str         # human-readable description
-    field: Optional[str] = None  # which data field triggered this
+    severity: str           # "critical" | "warning" | "info"
+    code:     str           # machine-readable (logging/metrics)
+    message:  str           # human-readable
+    field:    Optional[str] = None
 
 
 @dataclass
 class ValidationReport:
     issues: List[ValidationIssue] = field(default_factory=list)
 
-    def add(self, severity: str, code: str, message: str, field: str = None):
+    def add(self, severity: str, code: str, message: str,
+            field: Optional[str] = None) -> None:
         self.issues.append(ValidationIssue(severity, code, message, field))
+
+    def extend(self, other: "ValidationReport") -> None:
+        self.issues.extend(other.issues)
 
     @property
     def has_critical(self) -> bool:
@@ -86,63 +99,185 @@ class ValidationReport:
         if c == 0 and w == 0:
             return "OK"
         parts = []
-        if c:
-            parts.append(f"{c} critical")
-        if w:
-            parts.append(f"{w} warning")
+        if c: parts.append(f"{c} critical")
+        if w: parts.append(f"{w} warning")
         return ", ".join(parts)
 
+    def user_message(self, lang: str = "BM") -> str:
+        """
+        FIX BUG 6: Return student-facing HTML message for critical failures.
+        Called by main.py when has_critical is True.
+        """
+        if not self.has_critical:
+            return ""
+        criticals = self.criticals[:3]
+        if lang == "BM":
+            lines = ["⚠️ <b>Cikgu AI tidak dapat mengesahkan soalan ini:</b>\n"]
+            for i in criticals:
+                lines.append(f"• {i.message}")
+            lines.append("\n<i>Sila semak semula soalan atau taip dalam teks.</i>")
+        else:
+            lines = ["⚠️ <b>Cikgu AI could not validate this question:</b>\n"]
+            for i in criticals:
+                lines.append(f"• {i.message}")
+            lines.append("\n<i>Please check the question or type it as text.</i>")
+        return "\n".join(lines)
 
-# ── Formula Validator ──────────────────────────────────────────────────────
+
+# =============================================================================
+# OCR CORRECTOR  (FIX BUG 1)
+# =============================================================================
+
+class OCRCorrector:
+    """
+    Auto-corrects known OCR errors in chemical formula strings.
+
+    DETECTED PATTERNS:
+      - digit 0 (zero) vs letter O     : H20->H2O, Fe203->Fe2O3
+      - digit 1 (one)  vs letter l     : NaC1->NaCl, CaC12->CaCl2
+      - digit 1 (one)  vs Al           : A1Cl3->AlCl3
+      - all-caps symbols               : HCL->HCl, NAOH->NaOH
+
+    ANOMALOUS COUNT DETECTION:
+      parse_formula('H20') = {H:20} -- H subscript 20 is impossible
+      parse_formula('Fe203') = {Fe:203} -- impossible
+      These are caught by detect_anomalous_count().
+    """
+
+    _EXACT: Dict[str, str] = {
+        # zero vs O
+        "H20":"H2O",    "Na0H":"NaOH",  "KMn04":"KMnO4",  "K2Cr207":"K2Cr2O7",
+        "Fe203":"Fe2O3","A1203":"Al2O3","Cu0":"CuO",       "Mg0":"MgO",
+        "Zn0":"ZnO",    "Ca0":"CaO",    "N02":"NO2",       "S02":"SO2",
+        "C02":"CO2",    "H2S04":"H2SO4","HN03":"HNO3",     "Ca(0H)2":"Ca(OH)2",
+        "Ba(0H)2":"Ba(OH)2","NH40H":"NH4OH","Na2C03":"Na2CO3","CaC03":"CaCO3",
+        "Na2S03":"Na2SO3","Na2S203":"Na2S2O3","K2S04":"K2SO4","Na2S04":"Na2SO4",
+        "CuS04":"CuSO4","ZnS04":"ZnSO4","FeS04":"FeSO4",
+        "Fe2(S04)3":"Fe2(SO4)3","Al2(S04)3":"Al2(SO4)3",
+        "Cu(N03)2":"Cu(NO3)2","Fe(N03)3":"Fe(NO3)3","Ca(N03)2":"Ca(NO3)2",
+        "K4Fe(CN)6":"K4Fe(CN)6",  # already correct
+        # digit 1 vs l
+        "NaC1":"NaCl",  "KC1":"KCl",   "CaC12":"CaCl2",  "MgC12":"MgCl2",
+        "A1C13":"AlCl3","A1Cl3":"AlCl3","FeC13":"FeCl3",  "ZnC12":"ZnCl2",
+        "CuC12":"CuCl2","BaC12":"BaCl2","A1":"Al",
+        # all-caps
+        "HCL":"HCl",   "NACL":"NaCl",  "NAOH":"NaOH",    "NAHCO3":"NaHCO3",
+        "MGSO4":"MgSO4","CASO4":"CaSO4",
+    }
+
+    _PATTERNS: List[Tuple[re.Pattern, str]] = [
+        (re.compile(r'([A-Za-z])0([A-Za-z0-9])'), r'\g<1>O\g<2>'),   # 0->O between alphanums
+        (re.compile(r'([A-Za-z])0$'),              r'\g<1>O'),         # 0->O at end
+        (re.compile(r'\bA[1I](?=[A-Z(])'),         'Al'),              # A1/AI -> Al before formula
+        (re.compile(r'\bA[1I]\b'),                  'Al'),              # standalone A1->Al
+        (re.compile(r'(?<=[A-Z])C1(?=\d|$|\))'),   'Cl'),              # C1->Cl (NaC1->NaCl)
+    ]
+
+    # Max plausible subscript per element in SPM formulas
+    # N=10, H=22 to accommodate K4Fe(CN)6 (C:6,N:6) and C12H22O11 (H:22)
+    _MAX_SUBSCRIPT: Dict[str, int] = {
+        "H":22,"C":12,"N":10,"O":12,"S":4,"Cl":6,"F":6,"Br":3,"I":3,
+        "Na":3,"K":4,"Ca":3,"Mg":3,"Al":4,"Fe":4,"Cu":4,"Zn":4,"Mn":2,
+        "Cr":2,"Pb":2,"Ag":1,"Ba":1,
+    }
+    # Known valid complex/organic formulas that have high-count ligands
+    _COMPLEX_WHITELIST = {
+        "K4Fe(CN)6","K3Fe(CN)6","K2Fe(CN)6","Fe(CN)6",
+        "C12H22O11","C6H12O6","C2H5OH","CH3COOH",
+    }
+
+    def correct(self, formula: str) -> Tuple[str, bool, str]:
+        """Returns (corrected, was_changed, note)."""
+        if not formula or not isinstance(formula, str):
+            return formula, False, ""
+        original = formula
+        # 1. Exact lookup
+        if formula in self._EXACT:
+            corrected = self._EXACT[formula]
+            if corrected != formula:
+                return corrected, True, f"exact_table:{formula}->{corrected}"
+        # 2. Regex patterns
+        corrected = formula
+        for pattern, replacement in self._PATTERNS:
+            corrected = pattern.sub(replacement, corrected)
+        if corrected != original:
+            return corrected, True, f"regex:{original}->{corrected}"
+        return formula, False, ""
+
+    def detect_anomalous_count(self, formula: str) -> Optional[str]:
+        """Detect impossible element counts caused by OCR digit errors."""
+        if not _HAS_FORMULA_PARSER:
+            return None
+        # Skip whitelisted complex/organic formulas
+        if hasattr(self, "_COMPLEX_WHITELIST") and formula in self._COMPLEX_WHITELIST:
+            return None
+        try:
+            composition = _parse_formula(formula)
+        except Exception:
+            return None
+        for elem, count in composition.items():
+            max_ok = self._MAX_SUBSCRIPT.get(elem, 10)
+            if count > max_ok:
+                return (
+                    f"'{formula}' has {elem}:{count} — count {count} is impossible. "
+                    f"Likely OCR error (e.g. '0' read as 'O', so '{elem}{count}' "
+                    f"should be '{elem}2O' or similar)."
+                )
+        return None
+
+
+# =============================================================================
+# FORMULA VALIDATOR
+# =============================================================================
 
 class FormulaValidator:
     """
     Validates chemical formula strings.
-
-    Rules:
-      - Must start with uppercase letter
-      - All element symbols must be in AR table
-      - Parentheses must be balanced
-      - Subscript numbers must follow element or closing bracket
-      - Hydrate notation (CuSO4.5H2O) is valid
+    Uses OCRCorrector to detect and fix common OCR errors.
     """
 
     _ELEMENT_RE = re.compile(r'([A-Z][a-z]?)')
+    _corrector  = OCRCorrector()
 
     def validate(self, formula: str, field_name: str = "formula") -> ValidationReport:
         report = ValidationReport()
 
         if not formula or not isinstance(formula, str):
-            report.add("critical", "FORMULA_EMPTY",
-                       f"Formula is empty or not a string.", field_name)
+            report.add("critical", "FORMULA_EMPTY", "Formula is empty or missing.", field_name)
             return report
 
-        # Remove hydrate marker to check each segment
-        segments = formula.split('.')
-        for seg in segments:
-            # Strip leading stoichiometric coefficient
+        # Try OCR correction
+        corrected, was_changed, note = self._corrector.correct(formula)
+        if was_changed:
+            report.add("warning", "FORMULA_OCR_CORRECTED",
+                       f"'{formula}' looks like OCR error, corrected to '{corrected}'. ({note})",
+                       field_name)
+            formula = corrected
+
+        # Anomalous subscript count check (H20 -> H:20)
+        anomaly = self._corrector.detect_anomalous_count(formula)
+        if anomaly:
+            report.add("critical", "FORMULA_ANOMALOUS_COUNT", anomaly, field_name)
+            return report
+
+        # Validate each segment (CuSO4.5H2O has two segments)
+        for seg in formula.split('.'):
             seg = re.sub(r'^\d+', '', seg).strip()
-            if not seg:
-                continue
-            self._check_segment(seg, report, field_name)
+            if seg:
+                self._check_segment(seg, report, field_name)
 
         return report
 
-    def _check_segment(self, seg: str, report: ValidationReport, field_name: str):
-        # Must start with uppercase letter
-        if not seg or not seg[0].isupper():
+    def _check_segment(self, seg: str, report: ValidationReport, field_name: str) -> None:
+        if not seg[0].isupper():
             report.add("critical", "FORMULA_BAD_START",
-                       f"Formula segment '{seg}' doesn't start with uppercase — "
-                       f"likely OCR corruption.", field_name)
+                       f"'{seg}' doesn't start with uppercase — likely OCR corruption.", field_name)
             return
-
-        # Check balanced parentheses
+        # Balanced parentheses
         depth = 0
         for ch in seg:
-            if ch == '(':
-                depth += 1
-            elif ch == ')':
-                depth -= 1
+            if ch == '(': depth += 1
+            elif ch == ')': depth -= 1
             if depth < 0:
                 report.add("critical", "FORMULA_UNBALANCED_PARENS",
                            f"Unbalanced parentheses in '{seg}'.", field_name)
@@ -151,258 +286,490 @@ class FormulaValidator:
             report.add("critical", "FORMULA_UNBALANCED_PARENS",
                        f"Unbalanced parentheses in '{seg}'.", field_name)
             return
-
-        # Check all element symbols are valid
-        # Remove digits and brackets to get pure element stream
-        clean = re.sub(r'[0-9().]', '', seg)
+        # Valid element symbols
+        clean = re.sub(r'[0-9()\[\].]', '', seg)
         for m in self._ELEMENT_RE.finditer(clean):
             elem = m.group(1)
             if elem not in VALID_ELEMENTS:
                 report.add("warning", "FORMULA_UNKNOWN_ELEMENT",
-                           f"Element '{elem}' in '{seg}' not in AR table. "
-                           f"May be OCR corruption (e.g., '0' vs 'O', 'l' vs '1').",
-                           field_name)
+                           f"Element '{elem}' in '{seg}' not in SPM AR table. "
+                           f"Possible OCR error ('l'->1, 'O'->0).", field_name)
+
+    def correct(self, formula: str) -> Tuple[str, bool]:
+        corrected, changed, _ = self._corrector.correct(formula)
+        return corrected, changed
 
 
-# ── Unit / Value Validator ─────────────────────────────────────────────────
+# =============================================================================
+# EQUATION VALIDATOR  (FIX BUG 2 -- NEW)
+# =============================================================================
+
+class EquationValidator:
+    """
+    Validates chemical equation strings.
+    NEW in v4.0 -- the old validator had no equation validation at all.
+
+    Checks: arrow present, non-empty sides, balanced brackets,
+    valid element symbols in each species, placeholder word detection.
+    """
+
+    _formula_v = FormulaValidator()
+
+    _PLACEHOLDER_WORDS = {
+        "salt","gas","precipitate","water","acid","base","product",
+        "mendapan","garam","asid","bes","larutan","hasil",
+    }
+
+    def validate(self, equation: str, field_name: str = "equation") -> ValidationReport:
+        report = ValidationReport()
+
+        if not equation or not isinstance(equation, str):
+            report.add("critical", "EQUATION_EMPTY", "Equation is empty.", field_name)
+            return report
+
+        # Normalise arrow variants
+        eq = (equation
+              .replace("→", "->").replace("⇌", "->")
+              .replace("⟶", "->").replace("=>", "->"))
+
+        if "->" not in eq:
+            report.add("critical", "EQUATION_NO_ARROW",
+                       f"Equation '{equation[:50]}' has no arrow (→ or ->). "
+                       f"Check for OCR corruption.", field_name)
+            return report
+
+        lhs, rhs = [s.strip() for s in eq.split("->", 1)]
+
+        if not lhs:
+            report.add("critical", "EQUATION_EMPTY_LHS",
+                       "No reactants before arrow.", field_name)
+        if not rhs:
+            report.add("critical", "EQUATION_EMPTY_RHS",
+                       "No products after arrow.", field_name)
+        if report.has_critical:
+            return report
+
+        for label, side_str in (("reactants", lhs), ("products", rhs)):
+            self._check_side(side_str, label, report, field_name)
+
+        return report
+
+    def _check_side(self, side: str, label: str,
+                    report: ValidationReport, field_name: str) -> None:
+        if side.count("(") != side.count(")"):
+            report.add("critical", "EQUATION_UNBALANCED_PARENS",
+                       f"Unbalanced parentheses in {label}: '{side[:40]}'.", field_name)
+
+        for token in [t.strip() for t in side.split("+") if t.strip()]:
+            token_clean = re.sub(r"^\d+\s*", "", token).strip()
+            token_clean = re.sub(r"\((aq|s|l|g)\)$", "", token_clean,
+                                  flags=re.IGNORECASE).strip()
+            if not token_clean:
+                continue
+            if token_clean.lower() in self._PLACEHOLDER_WORDS:
+                report.add("warning", "EQUATION_PLACEHOLDER_WORD",
+                           f"'{token_clean}' in {label} is a placeholder, not a formula. "
+                           f"Stoich ratio will default to 1:1.", field_name)
+                continue
+            sub = self._formula_v.validate(token_clean, f"{field_name}.{label}")
+            report.extend(sub)
+
+
+# =============================================================================
+# UNIT / VALUE VALIDATOR  (FIX BUG 3 -- negative values -> CRITICAL)
+# =============================================================================
 
 class UnitValidator:
     """
-    Validates extracted numeric values are physically sensible.
+    Validates extracted numeric values for physical plausibility.
+
+    FIX BUG 3: negative mass, volume, moles, concentration -> CRITICAL
+    (old version returned WARNING for all out-of-range values).
     """
 
-    # Sensible ranges for SPM chemistry values
-    _RANGES = {
-        "mass_g":          (1e-6, 10_000),    # micrograms to 10kg
-        "volume_cm3":      (0.01,  10_000),   # 0.01mL to 10L
-        "volume_dm3":      (1e-5,  10.0),     # sub-mL to 10dm³ (typical SPM)
-        "molarity":        (1e-6,  20.0),     # dilute to concentrated acid
-        "moles":           (1e-8,  100.0),    # trace to 100 mol
-        "delta_T":         (-100,  200),      # °C change
-        "temperature":     (-50,   200),      # °C absolute
-        "delta_H":         (-5000, 5000),     # kJ/mol
-        "Q_joules":        (0.01,  1_000_000),
-        "ph":              (0,     14),
-        "poh":             (0,     14),
-        "e0_cathode":      (-5.0,  5.0),      # V
-        "e0_anode":        (-5.0,  5.0),
-        "time_seconds":    (0,     86400),    # up to 24 hours
-    }
-
-    def validate_value(
-        self, value: float, field_name: str, unit: str = ""
-    ) -> ValidationReport:
+    def validate_extraction_data(self, data: Dict[str, Any]) -> ValidationReport:
         report = ValidationReport()
-
-        if not isinstance(value, (int, float)):
-            report.add("critical", "VALUE_NOT_NUMERIC",
-                       f"'{field_name}' = {value!r} is not a number.", field_name)
+        if not data:
             return report
 
-        if math.isnan(value) or math.isinf(value):
-            report.add("critical", "VALUE_INVALID",
-                       f"'{field_name}' = {value} is NaN or Inf.", field_name)
-            return report
+        # Mass (negative = CRITICAL)
+        for key in ("mass_g", "given_mass_g", "jisim_g"):
+            val = data.get(key)
+            if val is not None and isinstance(val, (int, float)):
+                if val < 0:
+                    report.add("critical", "NEGATIVE_MASS",
+                               f"Mass {key}={val}g cannot be negative.", key)
+                elif val == 0:
+                    report.add("warning", "ZERO_MASS",
+                               f"Mass {key}=0. Check OCR.", key)
+                elif val > 10_000:
+                    report.add("warning", "LARGE_MASS",
+                               f"Mass {key}={val}g is very large for SPM.", key)
 
-        lo, hi = self._RANGES.get(field_name, (-1e18, 1e18))
-        if not (lo <= value <= hi):
-            report.add("warning", "VALUE_OUT_OF_RANGE",
-                       f"'{field_name}' = {value} {unit} is outside expected SPM range "
-                       f"[{lo}, {hi}]. Check for OCR digit corruption.", field_name)
+        # Volume (negative = CRITICAL)
+        for key in ("volume_cm3","V1","V2","known_volume_cm3",
+                    "unknown_volume_cm3","given_volume_cm3"):
+            val = data.get(key)
+            if val is not None and isinstance(val, (int, float)):
+                if val < 0:
+                    report.add("critical", "NEGATIVE_VOLUME",
+                               f"Volume {key}={val}cm³ cannot be negative.", key)
+                elif val > 10_000:
+                    report.add("warning", "LARGE_VOLUME",
+                               f"Volume {key}={val}cm³ is very large.", key)
+
+        for key in ("volume_dm3",):
+            val = data.get(key)
+            if val is not None and isinstance(val, (int, float)):
+                if val < 0:
+                    report.add("critical", "NEGATIVE_VOLUME_DM3",
+                               f"Volume {key}={val}dm³ cannot be negative.", key)
+                elif val > 10:
+                    report.add("warning", "LARGE_VOLUME_DM3",
+                               f"Volume {key}={val}dm³ is unusually large.", key)
+
+        # Molarity (negative = CRITICAL)
+        for key in ("molarity","M1","M2","known_molarity","unknown_molarity","concentration"):
+            val = data.get(key)
+            if val is not None and isinstance(val, (int, float)):
+                if val < 0:
+                    report.add("critical", "NEGATIVE_MOLARITY",
+                               f"Molarity {key}={val} cannot be negative.", key)
+                elif val > 20:
+                    report.add("warning", "HIGH_MOLARITY",
+                               f"Molarity {key}={val} > 20 mol/dm³ (above conc H2SO4). "
+                               f"Check for OCR digit error.", key)
+
+        # Moles (negative = CRITICAL)
+        val = data.get("moles")
+        if val is not None and isinstance(val, (int, float)):
+            if val < 0:
+                report.add("critical", "NEGATIVE_MOLES",
+                           f"Moles={val} cannot be negative.", "moles")
+            elif val > 500:
+                report.add("warning", "LARGE_MOLES",
+                           f"Moles={val} is unusually large.", "moles")
+
+        # pH / pOH (impossible values = CRITICAL)
+        for key in ("ph","pH"):
+            val = data.get(key)
+            if val is not None and isinstance(val, (int, float)):
+                if val < 0 or val > 14:
+                    report.add("critical", "INVALID_PH",
+                               f"pH={val} outside [0,14] — impossible for aqueous solution.", key)
+
+        for key in ("poh","pOH"):
+            val = data.get(key)
+            if val is not None and isinstance(val, (int, float)):
+                if val < 0 or val > 14:
+                    report.add("critical", "INVALID_POH",
+                               f"pOH={val} outside [0,14].", key)
+
+        # [H+] and [OH-] must be positive
+        for key in ("h_plus","h_conc","H_concentration"):
+            val = data.get(key)
+            if val is not None and isinstance(val, (int, float)):
+                if val <= 0:
+                    report.add("critical", "NON_POSITIVE_H_CONC",
+                               f"[H⁺]={val} must be positive.", key)
+                elif val > 20:
+                    report.add("warning", "HIGH_H_CONC",
+                               f"[H⁺]={val} mol/dm³ is extremely high.", key)
+
+        for key in ("oh_minus","oh_conc","OH_concentration"):
+            val = data.get(key)
+            if val is not None and isinstance(val, (int, float)):
+                if val <= 0:
+                    report.add("critical", "NON_POSITIVE_OH_CONC",
+                               f"[OH⁻]={val} must be positive.", key)
+
+        # Thermochemistry
+        val = data.get("delta_H")
+        if val is not None and isinstance(val, (int, float)):
+            if abs(val) > 10_000:
+                report.add("warning", "EXTREME_DELTA_H",
+                           f"ΔH={val} kJ/mol is very large. Check J vs kJ.", "delta_H")
+
+        val = data.get("Q_joules")
+        if val is not None and isinstance(val, (int, float)):
+            if val < 0:
+                report.add("warning", "NEGATIVE_Q",
+                           f"Q={val}J is negative. Check ΔT sign.", "Q_joules")
+
+        # Specific heat
+        for key in ("c_specific_heat","specific_heat","c"):
+            val = data.get(key)
+            if val is not None and isinstance(val, (int, float)):
+                if val <= 0:
+                    report.add("critical", "NON_POSITIVE_SPECIFIC_HEAT",
+                               f"Specific heat {key}={val} must be positive.", key)
+                elif val > 100:
+                    report.add("warning", "HIGH_SPECIFIC_HEAT",
+                               f"Specific heat {key}={val} J/g°C seems very high (water=4.2).", key)
+
+        # Electrode potentials
+        for key in ("e0_cathode","e0_anode"):
+            val = data.get(key)
+            if val is not None and isinstance(val, (int, float)):
+                if abs(val) > 10:
+                    report.add("warning", "EXTREME_ELECTRODE_POTENTIAL",
+                               f"E°{key}={val}V is outside typical range ±5V.", key)
 
         return report
 
-    def validate_extraction_data(self, data: dict) -> ValidationReport:
-        """Validate all numeric fields in an extracted data dict."""
-        report = ValidationReport()
-        numeric_fields = [
-            "mass_g", "volume_cm3", "volume_dm3", "molarity", "moles",
-            "delta_T", "delta_H", "Q_joules", "ph", "poh",
-            "e0_cathode", "e0_anode", "temperature",
-        ]
-        for field_name in numeric_fields:
-            val = data.get(field_name)
-            if val is not None:
-                sub = self.validate_value(val, field_name)
-                report.issues.extend(sub.issues)
-        return report
 
-
-# ── Answer Validator ───────────────────────────────────────────────────────
+# =============================================================================
+# ANSWER VALIDATOR  (FIX BUG 4 -- accepts str OR dict)
+# =============================================================================
 
 class AnswerValidator:
     """
     Sanity-checks solver output before returning to student.
-    Catches impossible chemistry: negative mass, pH outside 0–14, etc.
+
+    FIX BUG 4: solver_engine.solve_by_task() returns str, not dict.
+    Old validator called result.get() which crashed on strings.
+    This version handles BOTH str and dict.
+
+    For str output: extracts numbers with regex patterns that match
+    the solver's own formatted output (e.g. "pH = 2.00", "Jisim H2O = 36 g").
     """
 
-    def validate_answer(self, task: str, result: dict) -> ValidationReport:
+    _EXTRACT = [
+        (re.compile(r'pH\s*=\s*([+-]?\d+(?:\.\d+)?)',     re.IGNORECASE), "pH"),
+        (re.compile(r'pOH\s*=\s*([+-]?\d+(?:\.\d+)?)',    re.IGNORECASE), "pOH"),
+        (re.compile(r'\bn\s*=\s*([+-]?\d+(?:\.\d+)?)\s*mol', re.IGNORECASE), "n_mol"),
+        (re.compile(r'(?:Jisim|Mass)\s+\w+\s*=\s*([+-]?\d+(?:\.\d+)?)\s*g', re.IGNORECASE), "mass_g"),
+        (re.compile(r'ΔH\s*=\s*([+-]?\d+(?:\.\d+)?)',     re.IGNORECASE), "delta_H"),
+        (re.compile(r'E.cel[l]?\s*=\s*([+-]?\d+(?:\.\d+)?)', re.IGNORECASE), "e0_sel"),
+        (re.compile(r'Kemolaran\s+\w+\s*=\s*([+-]?\d+(?:\.\d+)?)', re.IGNORECASE), "molarity"),
+        (re.compile(r'(?:Isipadu|Volume)\s+\w+\s*=\s*([+-]?\d+(?:\.\d+)?)\s*cm', re.IGNORECASE), "volume_cm3"),
+    ]
+
+    def validate_answer(self, task: str, result: Any) -> ValidationReport:
         report = ValidationReport()
-
-        if not isinstance(result, dict):
+        if result is None:
             return report
 
-        if "error" in result:
-            # Solver already flagged an error — don't double-report
-            return report
+        values: Dict[str, float] = {}
 
-        # ── Mole calculations ──────────────────────────────────────────
-        for key in ("n_mol", "n_given", "n_target"):
-            val = result.get(key)
-            if val is not None:
-                if val < 0:
-                    report.add("critical", "NEGATIVE_MOLES",
-                               f"Solver returned {key}={val} mol — moles cannot be negative.",
-                               key)
-                if val > 1000:
-                    report.add("warning", "LARGE_MOLES",
-                               f"Solver returned {key}={val} mol — unusually large for SPM.",
-                               key)
+        if isinstance(result, dict):
+            if "error" in result:
+                return report
+            values = {k: v for k, v in result.items()
+                      if isinstance(v, (int, float))}
+        elif isinstance(result, str):
+            for pattern, key in self._EXTRACT:
+                m = pattern.search(result)
+                if m:
+                    try:
+                        values[key] = float(m.group(1))
+                    except (ValueError, IndexError):
+                        pass
 
-        # ── Mass ───────────────────────────────────────────────────────
-        mass = result.get("mass_g") or result.get("result")
-        if mass is not None and task in ("stoichiometry", "moles_from_mass",
-                                          "concentration", "mass_from_molarity"):
-            if mass < 0:
-                report.add("critical", "NEGATIVE_MASS",
-                           f"Solver returned mass={mass}g — mass cannot be negative.", "mass_g")
-            if mass > 100_000:
-                report.add("warning", "VERY_LARGE_MASS",
-                           f"Solver returned mass={mass}g — check input values.", "mass_g")
+        # pH / pOH must be [0, 14]
+        for key in ("pH", "pOH"):
+            val = values.get(key)
+            if val is not None and not (0 <= val <= 14):
+                report.add("critical", f"INVALID_{key}_OUTPUT",
+                           f"Solver returned {key}={val:.4f} — must be 0–14. "
+                           f"Check [H⁺]/[OH⁻] input.", key)
 
-        # ── pH ─────────────────────────────────────────────────────────
-        ph = result.get("pH")
-        if ph is not None:
-            if not (0 <= ph <= 14):
-                report.add("critical", "INVALID_PH",
-                           f"Solver returned pH={ph} — pH must be 0–14 for aqueous solutions.",
-                           "pH")
+        # Moles must be positive
+        val = values.get("n_mol")
+        if val is not None:
+            if val < 0:
+                report.add("critical", "NEGATIVE_MOLES_OUTPUT",
+                           f"Solver returned moles={val:.4f} — impossible.", "n_mol")
+            elif val > 500:
+                report.add("warning", "LARGE_MOLES_OUTPUT",
+                           f"Solver returned {val:.1f} mol — unusually large for SPM.", "n_mol")
 
-        poh = result.get("pOH")
-        if poh is not None:
-            if not (0 <= poh <= 14):
-                report.add("critical", "INVALID_POH",
-                           f"Solver returned pOH={poh} — must be 0–14.", "pOH")
+        # Mass must be positive
+        val = values.get("mass_g")
+        if val is not None and val < 0:
+            report.add("critical", "NEGATIVE_MASS_OUTPUT",
+                       f"Solver returned mass={val:.4f}g — impossible.", "mass_g")
 
-        # ── Thermochemistry ────────────────────────────────────────────
-        dh = result.get("delta_H")
-        if dh is not None:
-            if abs(dh) > 10_000:
-                report.add("warning", "LARGE_DELTA_H",
-                           f"ΔH={dh} kJ/mol is very large. Check if units are correct "
-                           f"(J vs kJ confusion is common).", "delta_H")
+        # ΔH sanity
+        val = values.get("delta_H")
+        if val is not None and abs(val) > 10_000:
+            report.add("warning", "EXTREME_DELTA_H_OUTPUT",
+                       f"ΔH={val:.1f} kJ/mol — check J vs kJ confusion. "
+                       f"Typical SPM range: 10–1000 kJ/mol.", "delta_H")
 
-        q_j = result.get("Q_joules")
-        if q_j is not None:
-            if q_j < 0:
-                report.add("warning", "NEGATIVE_Q",
-                           f"Q={q_j}J is negative. Check ΔT sign convention.", "Q_joules")
+        # EMF sanity
+        val = values.get("e0_sel")
+        if val is not None and abs(val) > 10:
+            report.add("warning", "EXTREME_EMF_OUTPUT",
+                       f"E°cell={val:.2f}V unusually large.", "e0_sel")
 
-        # ── Voltaic cell ───────────────────────────────────────────────
-        e0 = result.get("e0_sel")
-        if e0 is not None and abs(e0) > 10:
-            report.add("warning", "LARGE_EMF",
-                       f"E°cell={e0}V seems unusually large.", "e0_sel")
+        # Molarity must be positive
+        val = values.get("molarity")
+        if val is not None and val < 0:
+            report.add("critical", "NEGATIVE_MOLARITY_OUTPUT",
+                       f"Molarity={val:.4f} cannot be negative.", "molarity")
 
-        # ── Volume ────────────────────────────────────────────────────
-        vol = result.get("V2") or result.get("result")
-        if vol is not None and task in ("titration", "dilution"):
-            if vol < 0:
-                report.add("critical", "NEGATIVE_VOLUME",
-                           f"Solver returned volume={vol} — volume cannot be negative.", "V2")
-            if vol > 10_000:
-                report.add("warning", "LARGE_VOLUME",
-                           f"Solver returned volume={vol}cm³ — check input values.", "V2")
+        # Volume must be positive
+        val = values.get("volume_cm3")
+        if val is not None and val < 0:
+            report.add("critical", "NEGATIVE_VOLUME_OUTPUT",
+                       f"Volume={val:.4f}cm³ cannot be negative.", "volume_cm3")
 
         return report
 
 
-# ── Main Integration Wrapper ───────────────────────────────────────────────
+# =============================================================================
+# MAIN INTEGRATION WRAPPER  (FIX BUGS 5 & 6)
+# =============================================================================
 
 class ChemistryValidator:
     """
-    Combined validator used in the main pipeline.
+    Combined validator used in main.py pipeline.
 
-    Usage:
+    UPDATED main.py USAGE:
         cv = ChemistryValidator()
 
-        # Before solver:
-        pre_report = cv.validate_extraction(task, data)
-        if pre_report.has_critical:
-            return error_response(pre_report)
+        # Step 0 (NEW): OCR-correct formulas before validation
+        data = cv.correct_ocr(data)
 
-        result = solve_by_task(task, data)
+        # Step 1: Pre-solve
+        pre = cv.validate_extraction(task, data)
+        if pre.has_critical:
+            return pre.user_message(lang)      # NEW: bot-ready HTML
 
-        # After solver:
-        post_report = cv.validate_answer(task, result)
-        if post_report.has_critical:
-            logger.error(f"Solver sanity fail: {post_report.summary()}")
-            return error_response(post_report)
+        answer_str = solve_by_task(task, data)
+
+        # Step 2: Post-solve (NOW ACCEPTS str)
+        post = cv.validate_answer(task, answer_str)
+        if post.has_critical:
+            logger.error(f'solver sanity fail: {post.summary()}')
     """
 
-    def __init__(self):
-        self._formula_v = FormulaValidator()
-        self._unit_v    = UnitValidator()
-        self._answer_v  = AnswerValidator()
+    def __init__(self) -> None:
+        self._corrector  = OCRCorrector()
+        self._formula_v  = FormulaValidator()
+        self._equation_v = EquationValidator()
+        self._unit_v     = UnitValidator()
+        self._answer_v   = AnswerValidator()
 
-    def validate_extraction(self, task: str, data: dict) -> ValidationReport:
+    def correct_ocr(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Validate extracted data before calling solver.
-        Checks formulas, numeric values.
+        Auto-correct OCR errors in all formula fields.
+        Returns a NEW dict. Safe to call even if data has no formula fields.
+        """
+        if not data:
+            return data
+        corrected = dict(data)
+        for key in ("formula","given_formula","target_formula",
+                    "species","oxidant","reductant"):
+            val = corrected.get(key)
+            if val and isinstance(val, str):
+                fixed, changed, _ = self._corrector.correct(val)
+                if changed:
+                    corrected[key] = fixed
+        # formulas list
+        flist = corrected.get("formulas")
+        if flist and isinstance(flist, list):
+            corrected["formulas"] = [
+                self._corrector.correct(f)[0] if isinstance(f, str) else f
+                for f in flist
+            ]
+        return corrected
+
+    def validate_extraction(self, task: str, data: Dict[str, Any]) -> ValidationReport:
+        """
+        Validate extracted data BEFORE calling solver.
+        FIX BUG 5: now checks equation, species, oxidant fields.
         """
         report = ValidationReport()
-
         if not data:
             return report
 
-        # Formula checks
-        for key in ("formula", "given_formula", "target_formula"):
-            formula = data.get(key)
-            if formula and isinstance(formula, str):
-                sub = self._formula_v.validate(formula, key)
-                report.issues.extend(sub.issues)
+        # Formula fields (FIX BUG 5: added species, oxidant, reductant)
+        for key in ("formula","given_formula","target_formula",
+                    "species","oxidant","reductant"):
+            val = data.get(key)
+            if val and isinstance(val, str):
+                report.extend(self._formula_v.validate(val, key))
 
-        # Numeric value checks
-        sub = self._unit_v.validate_extraction_data(data)
-        report.issues.extend(sub.issues)
+        # Equation field (FIX BUG 5: was never checked before)
+        equation = data.get("equation")
+        if equation and isinstance(equation, str):
+            report.extend(self._equation_v.validate(equation, "equation"))
 
-        # Task-specific checks
-        report.issues.extend(self._task_specific_checks(task, data).issues)
+        # Numeric fields
+        report.extend(self._unit_v.validate_extraction_data(data))
+
+        # Task-specific rules
+        report.extend(self._task_specific(task, data))
 
         return report
 
-    def _task_specific_checks(self, task: str, data: dict) -> ValidationReport:
+    def _task_specific(self, task: str, data: Dict[str, Any]) -> ValidationReport:
         report = ValidationReport()
 
-        if task in ("ph_from_h", "ph_from_poh"):
-            h_plus = data.get("h_plus")
-            if h_plus is not None and h_plus <= 0:
-                report.add("critical", "INVALID_H_CONCENTRATION",
-                           f"[H+] = {h_plus} — concentration must be positive.", "h_plus")
-            if h_plus is not None and h_plus > 20:
-                report.add("warning", "HIGH_H_CONCENTRATION",
-                           f"[H+] = {h_plus} mol/dm³ seems very high for SPM context.", "h_plus")
+        # Stoichiometry: coefficients must not be zero
+        if "stoichiometry" in task:
+            for key in ("given_coeff","target_coeff"):
+                val = data.get(key)
+                if val is not None and val == 0:
+                    report.add("critical","ZERO_STOICH_COEFF",
+                               f"Coefficient {key}=0 — equation parse error.", key)
+            gf = data.get("given_formula")
+            tf = data.get("target_formula")
+            if gf and tf and gf == tf:
+                report.add("warning","SAME_GIVEN_TARGET",
+                           f"given_formula==target_formula=='{gf}'. Check equation.", "given_formula")
 
+        # Empirical formula: percentages should sum to ~100
         if task == "empirical_formula":
             masses = data.get("element_masses", {})
-            total  = sum(masses.values()) if masses else 0
-            # Percentages should sum to ~100 (±2 rounding)
-            if masses and 50 < total < 200:
-                if not (95 <= total <= 105):
-                    report.add("warning", "EMPIRICAL_PERCENT_SUM",
-                               f"Percentage sum = {total:.1f}% (expected ~100%). "
+            if masses and isinstance(masses, dict):
+                total = sum(v for v in masses.values() if isinstance(v, (int, float)))
+                if 50 < total < 200 and not (95 <= total <= 105):
+                    report.add("warning","EMPIRICAL_PERCENT_SUM",
+                               f"Element percentages sum={total:.1f}% (expected ~100%). "
                                f"Check for OCR digit corruption.", "element_masses")
 
-        if task in ("stoichiometry_mass_to_mass", "stoichiometry_mass_to_volume"):
-            given_coeff  = data.get("given_coeff",  1)
-            target_coeff = data.get("target_coeff", 1)
-            if given_coeff == 0 or target_coeff == 0:
-                report.add("critical", "ZERO_STOICH_COEFF",
-                           "Stoichiometric coefficient is 0 — likely equation parse error.",
-                           "coeff")
+        # Titration: volumes must be positive
+        if "titration" in task:
+            for key in ("known_volume_cm3","unknown_volume_cm3"):
+                val = data.get(key)
+                if val is not None and val <= 0:
+                    report.add("critical","NON_POSITIVE_TITRATION_VOLUME",
+                               f"Titration volume {key}={val} must be positive.", key)
+
+        # Calorimetry: initial != final temperature
+        if task in ("calorimetry","delta_h_from_calorimetry"):
+            t_i = data.get("temp_initial")
+            t_f = data.get("temp_final")
+            if t_i is not None and t_f is not None and t_i == t_f:
+                report.add("warning","ZERO_DELTA_T",
+                           f"temp_initial==temp_final=={t_i}°C. ΔT=0. Check OCR values.",
+                           "temp_initial")
+
+        # Voltaic cell: cathode must be more positive for spontaneous reaction
+        if task == "voltaic_cell":
+            e_cat = data.get("e0_cathode")
+            e_an  = data.get("e0_anode")
+            if e_cat is not None and e_an is not None and e_cat <= e_an:
+                report.add("warning","NON_SPONTANEOUS_CELL",
+                           f"E°cathode({e_cat}V) <= E°anode({e_an}V) — cell is non-spontaneous. "
+                           f"Check electrode assignment.", "e0_cathode")
+
+        # Dilution: M2 must be less than M1
+        if task == "dilution":
+            m1 = data.get("M1")
+            m2 = data.get("M2")
+            if m1 is not None and m2 is not None and m2 > m1:
+                report.add("warning","DILUTION_CONCENTRATION_INCREASE",
+                           f"M2={m2} > M1={m1} — dilution should decrease concentration. "
+                           f"Check M1/M2 values.", "M2")
 
         return report
 
-    def validate_answer(self, task: str, result: dict) -> ValidationReport:
-        """Validate solver output before returning to student."""
+    def validate_answer(self, task: str, result: Any) -> ValidationReport:
+        """
+        FIX BUG 4: accepts str (from solver_engine) as well as dict.
+        """
         return self._answer_v.validate_answer(task, result)

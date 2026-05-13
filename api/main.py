@@ -643,7 +643,10 @@ async def lifespan(app: FastAPI):
         _app_state["solve_fn"]  = solve_by_task
         logger.info("All components loaded.")
     except Exception as e:
-        logger.error(f"Component load failed: {e}")
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"Component load FAILED — bot will return 503: {e}")
+        logger.error(f"Full traceback:\n{tb}")
         _app_state["error"] = str(e)
 
     # PATCHED v3.3.0 — quota guard for per-user rate limiting
@@ -821,10 +824,13 @@ async def answer_question(req: ChatRequest) -> ChatResponse:
         try:
             from chemistry_validator import ChemistryValidator
             cv         = ChemistryValidator()
+            data       = cv.correct_ocr(data)          # auto-fix H20->H2O etc
             pre_report = cv.validate_extraction(task, data)
             if pre_report.has_critical:
                 for issue in pre_report.criticals:
                     logger.warning(f"Pre-solve validation task={task}: {issue.code} — {issue.message}")
+                final_answer = pre_report.user_message(lang)
+                answer_type  = "fallback"
         except ImportError:
             pass  # chemistry_validator.py not yet deployed
 
@@ -832,8 +838,8 @@ async def answer_question(req: ChatRequest) -> ChatResponse:
             solver_result = solve_fn(task, data)
             solver_used   = True
 
-            # PATCHED v3.3.0 — post-solve sanity check
-            if cv and isinstance(solver_result, dict):
+            # Post-solve sanity check (accepts str or dict)
+            if cv:
                 post_report = cv.validate_answer(task, solver_result)
                 if post_report.has_critical:
                     for issue in post_report.criticals:

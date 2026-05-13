@@ -623,10 +623,18 @@ def extract_oxidation_target(text: str, formulas: List[str]) -> Optional[Dict[st
     # FIX BUG #3: extract charge from question text, not just from species string
     charge = extract_ion_charge(normalize_text(text))
 
-    species = formulas[0] if formulas else None
-    if not species:
-        m = re.search(r"dalam\s+([A-Z][A-Za-z0-9()+-]+)", text)
-        species = m.group(1) if m else None
+    # species = full compound formula (e.g. KMnO4, K2Cr2O7), not the element
+    # Priority: formula after "dalam/in", then first formula found
+    _m_dalam = re.search(r"(?:dalam|in|of)\s+([A-Z][A-Za-z0-9()]+)", text)
+    if _m_dalam and _m_dalam.group(1) in formulas:
+        species = _m_dalam.group(1)
+    elif _m_dalam:
+        species = _m_dalam.group(1)
+    elif formulas:
+        # Pick the largest formula (most likely to be the compound, not the element)
+        species = max(formulas, key=len)
+    else:
+        species = None
 
     if not species:
         return None
@@ -1112,6 +1120,54 @@ def structured_extract(question: str) -> Optional[Dict[str, Any]]:
                 "given_formula": given_f,
                 "given_mass_g": masses[0],
                 "target_formula": target_f,
+                "condition": condition,
+            }
+
+    # Stoichiometry fallback: question has two formulas + mass but NO equation arrow
+    # Pattern: "4g H2 tindak balas dengan O2, jisim H2O?"
+    # We cannot balance equations — but we can tell user equation is needed.
+    # For common pairs (combustion, neutralisation) we attempt a known equation.
+    if (not equation) and masses and formulas and len(formulas) >= 2 and any(k in ql for k in [
+        "tindak balas", "reacts", "dibakar", "burnt", "terbakar", "jisim",
+        "mass of", "hitungkan jisim",
+    ]):
+        # Try to infer equation from known common reactions
+        _COMMON_EQ = {
+            frozenset(['H2','O2']):   ('2H2 + O2 -> 2H2O',  'H2',   'H2O'),
+            frozenset(['C','O2']):    ('C + O2 -> CO2',      'C',    'CO2'),
+            frozenset(['CH4','O2']):  ('CH4 + 2O2 -> CO2 + 2H2O', 'CH4', 'CO2'),
+            frozenset(['S','O2']):    ('S + O2 -> SO2',       'S',    'SO2'),
+            frozenset(['Mg','O2']):   ('2Mg + O2 -> 2MgO',   'Mg',   'MgO'),
+            frozenset(['Ca','O2']):   ('2Ca + O2 -> 2CaO',   'Ca',   'CaO'),
+            frozenset(['Al','O2']):   ('4Al + 3O2 -> 2Al2O3','Al',   'Al2O3'),
+            frozenset(['Fe','O2']):   ('4Fe + 3O2 -> 2Fe2O3','Fe',   'Fe2O3'),
+            frozenset(['CaCO3','HCl']): ('CaCO3 + 2HCl -> CaCl2 + H2O + CO2', 'CaCO3', 'CO2'),
+            frozenset(['Na','O2']):   ('4Na + O2 -> 2Na2O',  'Na',   'Na2O'),
+            frozenset(['Zn','HCl']):  ('Zn + 2HCl -> ZnCl2 + H2',   'Zn',   'H2'),
+            frozenset(['Fe','HCl']):  ('Fe + 2HCl -> FeCl2 + H2',    'Fe',   'H2'),
+        }
+        # Check all pairs (not just first two) since target formula may appear first
+        import itertools as _it
+        key = None
+        for _pair in _it.combinations(formulas, 2):
+            if frozenset(_pair) in _COMMON_EQ:
+                key = frozenset(_pair)
+                break
+        if key in _COMMON_EQ:
+            _eq, _given, _target = _COMMON_EQ[key]
+            # Respect which formula has the mass
+            if formulas[0] != _given and formulas[0] in _eq:
+                _given = formulas[0]
+                # derive target from RHS
+                _rhs = _eq.split('->')[1] if '->' in _eq else ''
+                _rhs_f = re.findall(r'[A-Z][A-Za-z0-9()]*', _rhs)
+                _target = _rhs_f[0] if _rhs_f else _target
+            return {
+                "task": "stoichiometry_mass_to_mass",
+                "equation": _eq,
+                "given_formula": _given,
+                "given_mass_g": masses[0],
+                "target_formula": _target,
                 "condition": condition,
             }
 

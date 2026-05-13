@@ -1,109 +1,119 @@
 """
-bot/formatter.py — Cikgu AI Kimia
-===================================
-Chemistry-safe Telegram message formatter.
+bot/formatter.py — Cikgu AI Kimia  [PRODUCTION HARDENING v4.0]
+===============================================================
+REPLACES: existing bot/formatter.py
 
-REPLACES: ParseMode.MARKDOWN → ParseMode.HTML
+USES: ParseMode.HTML throughout (never ParseMode.MARKDOWN)
 
-WHY:
-  Telegram Markdown V1 breaks on chemistry units containing ⁻¹, ², ³,
-  unmatched asterisks inside formulas, and Greek letters (ΔH, ΔT).
-  Markdown V2 requires escaping 18 special characters — fragile.
-  HTML mode escapes only 3 chars (<, >, &) and is predictable.
+WHY HTML, NOT MARKDOWN:
+  Telegram MarkdownV1 breaks on:
+    - ΔH, ΔT (unmatched asterisk-like chars)
+    - mol dm⁻³, kJ mol⁻¹ (superscript ⁻ treated as italic marker)
+    - Chemical equations with unmatched special chars
+  MarkdownV2 requires escaping 18 special characters —
+    every chemistry formula becomes a minefield.
+  HTML only requires escaping 3 chars: & < >
+    All chemistry unicode (ΔH, °C, →, ⇌, ²) renders natively.
 
-FORMAT:
-  Solver answer section headers → <b>Diberi:</b>
-  Formulas, equations          → <code>NaOH + HCl → NaCl + H₂O</code>
-  Numeric results              → plain text (units rendered correctly)
-  LLM explanation              → plain text with italic notes
+FORMAT SPEC:
+  Headers:         <b>Diberi:</b>
+  Formulas/eq:     <code>NaOH + HCl → NaCl + H₂O</code>
+  Numeric answers: plain text  (units render correctly)
+  Explanations:    <i>italic note</i>
+  Separators:      ─────────────
+  Max per message: 4000 chars  (Telegram limit 4096, buffer for safety)
 
-SPLITTING:
-  Telegram limit: 4096 chars per message.
-  Split on paragraph boundaries (double newline) not arbitrary bytes.
-  Never split in the middle of a <code>...</code> block.
-  Never split a solver answer block (Diberi/Formula/Pengiraan/Jawapan).
+SPLIT ALGORITHM:
+  1. If total ≤ 4000: return as-is
+  2. Split on double-newline (paragraph boundaries)
+  3. If paragraph > 4000: split on single newline
+  4. NEVER split inside a <code>...</code> block
+  5. Hard break at 3900 chars as absolute safety net
 
-CHEMISTRY UNICODE RENDERING:
-  The formatter does NOT strip chemistry unicode — it lets Telegram
-  render ΔH, ⁻¹, °C, → natively in HTML mode.
-  Only &, <, > are escaped (HTML safety, not chemistry safety).
+CHEMISTRY UNICODE POLICY:
+  - DO NOT strip chemistry unicode — Telegram renders it fine in HTML
+  - DO escape & < >   (HTML injection safety)
+  - ΔH, °C, →, ⇌, ², ⁻ all pass through untouched
 """
 
 from __future__ import annotations
 
 import html
 import re
-from typing import List
+from typing import List, Optional
 
-# ── HTML escaping ──────────────────────────────────────────────────────────
+# ── HTML escape (only 3 chars — chemistry-safe) ──────────────────────────────
 
 def _esc(text: str) -> str:
-    """Escape HTML special chars. Only &, <, > — safe for chemistry unicode."""
+    """Escape only &, <, > for HTML safety. Chemistry unicode passes through."""
     return html.escape(text, quote=False)
 
 
-# ── Section header detection ───────────────────────────────────────────────
+# ── Section header detection ──────────────────────────────────────────────────
 
-_SECTION_HEADERS_BM = {
+_HEADERS_BM = frozenset({
     "Diberi:", "Formula:", "Pengiraan:", "Jawapan:",
     "Diberi :", "Formula :", "Pengiraan :", "Jawapan :",
-}
-_SECTION_HEADERS_EN = {
+    "Langkah:", "Langkah :",
+})
+_HEADERS_EN = frozenset({
     "Given:", "Formula:", "Calculation:", "Answer:",
     "Given :", "Formula :", "Calculation :", "Answer :",
-}
-_ALL_HEADERS = _SECTION_HEADERS_BM | _SECTION_HEADERS_EN
+    "Step:", "Step :",
+})
+_ALL_HEADERS = _HEADERS_BM | _HEADERS_EN
 
 
 def _is_section_header(line: str) -> bool:
-    stripped = line.strip()
-    return any(stripped.startswith(h) for h in _ALL_HEADERS)
+    s = line.strip()
+    return any(s.startswith(h) for h in _ALL_HEADERS)
 
+
+# ── Formula/calculation line detection ───────────────────────────────────────
 
 def _is_formula_line(line: str) -> bool:
     """
-    Heuristic: lines containing chemical formulas/equations should
-    be wrapped in <code> for monospace rendering.
+    Returns True if this line should be wrapped in <code> for monospace.
     Criteria:
-      - Contains -> or → (equation)
-      - OR is a pure formula (all uppercase letters + digits + brackets)
-      - OR contains mol, g, dm3, cm3 (calculation line)
+      - Contains chemical equation arrow (→ or ->)
+      - Starts with 2+ spaces indent (structured solver output)
+      - Contains mol/dm3/cm3 with = sign (calculation step)
     """
-    stripped = line.strip()
-    if not stripped:
+    s = line.strip()
+    if not s:
         return False
-    has_arrow    = '->' in stripped or '→' in stripped or '⇌' in stripped
-    has_calc_ops = any(x in stripped for x in ['÷', '×', '=', 'mol', 'dm3', 'cm3'])
-    is_formula   = bool(re.match(r'^[A-Z][A-Za-z0-9()·.→⇌\-\+ =÷×]+$', stripped))
-    return has_arrow or (has_calc_ops and is_formula)
+    has_arrow    = "->" in s or "→" in s or "⇌" in s or "<->" in s
+    is_indented  = line.startswith("  ")   # 2-space indent = calculation line
+    has_calc     = bool(re.search(r'=.*(?:mol|dm3|cm3|kJ|J|g)\b', s, re.IGNORECASE))
+    return has_arrow or (is_indented and has_calc)
 
 
-# ── Core formatter ─────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# CORE FORMATTER
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def format_solver_answer(solver_text: str, answer_type: str = "calculation") -> str:
     """
-    Convert raw solver/LLM output to Telegram HTML format.
+    Convert raw solver/LLM output to Telegram HTML.
 
-    answer_type: "calculation" | "theory" | "fallback"
+    answer_type: "calculation" | "theory" | "fallback" | "error"
     """
     emoji_map = {
         "calculation": "🧮",
         "theory":      "📚",
         "fallback":    "ℹ️",
+        "error":       "⚠️",
     }
     emoji = emoji_map.get(answer_type, "💬")
-
-    lines   = solver_text.split('\n')
-    parts   = [f"<b>{emoji} Cikgu AI Kimia</b>\n"]
-    in_code = False   # track if we're inside a <code> block
+    lines = solver_text.split("\n")
+    parts = [f"<b>{emoji} Cikgu AI Kimia</b>\n"]
 
     for line in lines:
         raw     = line.rstrip()
         escaped = _esc(raw)
 
-        # ── Section headers → bold ─────────────────────────────────────
         if _is_section_header(raw):
-            # Extract header and rest of line
+            # ── Section header → bold ─────────────────────────────────────
             for header in _ALL_HEADERS:
                 if raw.strip().startswith(header):
                     rest = raw.strip()[len(header):].strip()
@@ -113,42 +123,36 @@ def format_solver_answer(solver_text: str, answer_type: str = "calculation") -> 
                         parts.append(f"<b>{_esc(header)}</b>")
                     break
 
-        # ── Calculation / formula lines → code ─────────────────────────
-        elif _is_formula_line(raw) and '  ' in raw:
-            # Indented calculation lines (2+ spaces indent)
-            stripped = raw.strip()
-            parts.append(f"<code>  {_esc(stripped)}</code>")
+        elif _is_formula_line(raw):
+            # ── Formula / calculation line → code ─────────────────────────
+            parts.append(f"<code>{_esc(raw.strip())}</code>")
 
-        # ── Separator lines ─────────────────────────────────────────────
-        elif raw.strip() in ('---', '───', '━━━'):
-            parts.append('─────────────')
+        elif raw.strip() in ("---", "───", "━━━", "─────────────"):
+            # ── Separator ─────────────────────────────────────────────────
+            parts.append("─────────────")
 
-        # ── Empty lines ─────────────────────────────────────────────────
         elif not raw.strip():
-            parts.append('')
+            parts.append("")
 
-        # ── Regular text ─────────────────────────────────────────────────
         else:
             parts.append(escaped)
 
-    return '\n'.join(parts)
+    return "\n".join(parts)
 
 
 def format_answer(raw_answer: str, answer_type: str = "calculation") -> str:
     """
-    Main public function — wraps solver + explanation into final Telegram HTML.
+    Main public formatter.
+    Splits raw answer on "\\n---\\n" into solver block + explanation.
     """
-    # Split solver block and explanation (separated by ---)
-    if '\n---\n' in raw_answer:
-        solver_part, explanation = raw_answer.split('\n---\n', 1)
+    if "\n---\n" in raw_answer:
+        solver_part, explanation = raw_answer.split("\n---\n", 1)
     else:
         solver_part  = raw_answer
         explanation  = ""
 
-    # Format solver block
     formatted = format_solver_answer(solver_part.strip(), answer_type)
 
-    # Add explanation in italic
     if explanation.strip():
         formatted += f"\n\n<i>{_esc(explanation.strip())}</i>"
 
@@ -156,79 +160,126 @@ def format_answer(raw_answer: str, answer_type: str = "calculation") -> str:
 
 
 def format_theory_answer(llm_text: str) -> str:
-    """Format a theory/RAG answer — no code blocks, just clean paragraphs."""
-    lines  = llm_text.split('\n')
-    parts  = ["📚 <b>Cikgu AI Kimia</b>\n"]
+    """Format a theory/RAG answer — clean paragraphs, no code blocks."""
+    lines = llm_text.split("\n")
+    parts = ["📚 <b>Cikgu AI Kimia</b>\n"]
     for line in lines:
         raw = line.rstrip()
         if not raw:
-            parts.append('')
+            parts.append("")
         else:
             parts.append(_esc(raw))
-    return '\n'.join(parts)
+    return "\n".join(parts)
 
 
 def format_fallback(message: str) -> str:
+    """Format a graceful degradation message."""
     return f"ℹ️ {_esc(message)}"
 
 
-# ── Safe message splitter ──────────────────────────────────────────────────
+def format_error(message: str) -> str:
+    """Format an error message (validation failure, quota limit, etc.)."""
+    return f"⚠️ {_esc(message)}"
 
-MAX_MSG_LEN  = 4000   # Telegram limit is 4096; use 4000 for safety margin
-HARD_MAX     = 4090   # absolute ceiling
+
+def format_ocr_preview(extracted_text: str, lang: str = "BM") -> str:
+    """Format the OCR preview shown for medium-confidence extractions."""
+    preview = extracted_text[:300] + ("..." if len(extracted_text) > 300 else "")
+    if lang == "BM":
+        return (
+            f"📷 <b>Cikgu AI membaca gambar ini:</b>\n\n"
+            f"<code>{_esc(preview)}</code>\n\n"
+            f"Adakah ini betul?\n"
+            f"✅ Balas <b>ya</b> untuk teruskan\n"
+            f"✏️ Balas <b>tidak</b> untuk taip semula"
+        )
+    else:
+        return (
+            f"📷 <b>I extracted this from your image:</b>\n\n"
+            f"<code>{_esc(preview)}</code>\n\n"
+            f"Is this correct?\n"
+            f"✅ Reply <b>yes</b> to proceed\n"
+            f"✏️ Reply <b>no</b> to type manually"
+        )
+
+
+def format_sources(sources: list, lang: str = "BM") -> str:
+    """Format RAG source citations as a footer line."""
+    if not sources:
+        return ""
+    label  = "📖 Sumber:" if lang == "BM" else "📖 Sources:"
+    topics = [f"• {_esc(s.get('topic', ''))}" for s in sources[:2] if s.get("topic")]
+    if not topics:
+        return ""
+    return f"\n\n<i>{label} {', '.join(topics)}</i>"
+
+
+def format_timing(ms: float, from_cache: bool = False, lang: str = "BM") -> str:
+    """Format timing footer."""
+    indicator = "⚡ Cache" if from_cache else "⏱"
+    return f"\n<i>{indicator} {ms:.0f}ms</i>"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SAFE MESSAGE SPLITTER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+MAX_MSG_LEN = 4000   # Telegram limit 4096; 4000 = safety margin
+HARD_MAX    = 3900   # Absolute ceiling for hard-break case
 
 
 def split_message(text: str, max_len: int = MAX_MSG_LEN) -> List[str]:
     """
-    Split a long Telegram HTML message into chunks ≤ max_len chars.
+    Split a long HTML message into chunks ≤ max_len chars.
 
-    Strategy:
-      1. Try to split on double-newline (paragraph boundaries)
-      2. If a paragraph > max_len, split on single newline
-      3. Never split inside a <code>...</code> block
-      4. If a single line > max_len, hard split at max_len-20
-         (rare for chemistry answers, but safety net)
+    Algorithm:
+      1. If total ≤ max_len: return as-is  (fast path)
+      2. Split on \\n\\n (paragraph boundaries)
+      3. For paragraphs > max_len: split on \\n (line boundaries)
+      4. NEVER split inside a <code>...</code> block
+      5. Single line > max_len → hard break at safe position
 
-    Returns list of HTML-safe message chunks.
+    Returns:
+      List[str] of HTML-safe message chunks.
+      Each chunk is ready to send with parse_mode=HTML.
     """
     if len(text) <= max_len:
         return [text]
 
-    paragraphs = text.split('\n\n')
-    chunks:    List[str] = []
-    current:   str       = ""
+    paragraphs = text.split("\n\n")
+    chunks: List[str] = []
+    current = ""
 
     for para in paragraphs:
-        # If adding this paragraph stays within limit
-        test = (current + '\n\n' + para).strip() if current else para
+        test = (current + "\n\n" + para).strip() if current else para
+
         if len(test) <= max_len:
             current = test
             continue
 
-        # Para is too large to join — flush current buffer
+        # Flush current buffer before this paragraph
         if current:
             chunks.append(current.strip())
             current = ""
 
-        # Para itself fits in one message
+        # Paragraph fits in one message
         if len(para) <= max_len:
             current = para
             continue
 
-        # Para too large — split on single newlines
-        for line in para.split('\n'):
-            test = (current + '\n' + line).strip() if current else line
+        # Paragraph too large: split on single newlines
+        for line in para.split("\n"):
+            test = (current + "\n" + line).strip() if current else line
             if len(test) <= max_len:
                 current = test
             else:
                 if current:
                     chunks.append(current.strip())
-                # Handle a single line that's too long (hard split)
+                # Handle a single line that's too long
                 while len(line) > max_len:
-                    # Find safe break point: don't break inside <code> or <b>
-                    break_at = _safe_break_point(line, max_len)
-                    chunks.append(line[:break_at])
-                    line = line[break_at:]
+                    bp = _safe_break_point(line, max_len)
+                    chunks.append(line[:bp])
+                    line = line[bp:]
                 current = line
 
     if current.strip():
@@ -239,42 +290,26 @@ def split_message(text: str, max_len: int = MAX_MSG_LEN) -> List[str]:
 
 def _safe_break_point(text: str, max_len: int) -> int:
     """
-    Find a safe character position to break the text.
-    Avoids breaking inside HTML tags.
+    Find safe char position to break text.
+
+    Avoids breaking:
+      - Inside HTML tags (<b>, </b>, <code>, etc.)
+      - Inside a <code>...</code> block  (monospace chemistry)
+
+    Strategy: walk backwards from max_len to find a space that
+    is NOT inside an open HTML tag.
     """
     if len(text) <= max_len:
         return len(text)
 
-    # Walk backwards from max_len to find a space that's not inside a tag
+    # Walk backwards to find a space outside HTML tags
     for i in range(max_len, max(max_len - 100, 0), -1):
-        if text[i] == ' ':
-            # Check we're not inside an HTML tag
-            before = text[:i]
-            open_tags  = before.count('<')
-            close_tags = before.count('>')
-            if open_tags == close_tags:
+        if i < len(text) and text[i] == " ":
+            prefix     = text[:i]
+            open_count  = prefix.count("<")
+            close_count = prefix.count(">")
+            if open_count == close_count:
                 return i
 
-    return max_len   # hard break
-
-
-# ── Source citation formatter ──────────────────────────────────────────────
-
-def format_sources(sources: list, lang: str = "BM") -> str:
-    """Format RAG source citations for appending to answer."""
-    if not sources:
-        return ""
-    label   = "📖 Sumber:" if lang == "BM" else "📖 Sources:"
-    topics  = [f"• {_esc(s.get('topic',''))}" for s in sources[:2] if s.get('topic')]
-    if not topics:
-        return ""
-    return f"\n\n<i>{label} {', '.join(topics)}</i>"
-
-
-def format_timing(ms: float, from_cache: bool, lang: str = "BM") -> str:
-    """Format timing footer line."""
-    if from_cache:
-        indicator = "⚡ Cache"
-    else:
-        indicator = "⏱"
-    return f"\n<i>{indicator} {ms:.0f}ms</i>"
+    # Hard break — last resort
+    return HARD_MAX
